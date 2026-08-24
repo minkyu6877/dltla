@@ -1,0 +1,22 @@
+control:
+  tolerance: 0.08
+  max_velocity: 0.30
+  uwb_timeout: 0.50
+  control_rate_hz: 20.0
+
+missions:
+  SMALL_A:
+    robots: 1
+    route:
+      - [1.0, 0.0]
+      - [2.0, 0.0]
+      - [4.0, 1.0]
+
+  LONG_A:
+    robots: 2
+    follower_delay: 1.0
+    route:
+      - [1.0, 0.0]
+      - [3.0, 0.5]
+      - [5.0, 2.0]
+

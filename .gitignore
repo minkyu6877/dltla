@@ -12,6 +12,12 @@ __pycache__/
 *.py[cod]
 .venv/
 
+# ROS 2 generated output and local snapshots
+build/
+install/
+log/
+*.bak_*
+
 # Editor and OS files
 .vscode/
 .idea/
