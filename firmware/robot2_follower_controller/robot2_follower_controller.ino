@@ -24,7 +24,7 @@
 
 // Copy secrets.example.h to secrets.h and enter the hotspot credentials.
 const uint8_t ROBOT_ID = 2;
-const char* FIRMWARE_VERSION = "2026-08-21-r2-follow-retreat-v2";
+const char* FIRMWARE_VERSION = "2026-08-24-r2-wheel-ff-v1";
 
 const uint16_t COMMAND_PORT = 4210;
 const uint16_t STATUS_PORT = 4212;
@@ -78,6 +78,14 @@ const float INTEGRAL_LIMIT = 60.0f;
 const float RPM_DEADBAND = 3.0f;
 const float MAX_PWM = 0.60f;
 const float MAX_PWM_CHANGE_PER_CONTROL = 0.08f;
+
+// Per-wheel Coulomb-friction feedforward from the 2026-08-24 RPM test.
+// FL and RR were consistently slow at 15/30/45 RPM. Start conservatively;
+// keep FR/RL at zero because they already track the target closely.
+const float STATIC_FF_FL = 0.0045f;
+const float STATIC_FF_FR = 0.0000f;
+const float STATIC_FF_RL = 0.0000f;
+const float STATIC_FF_RR = 0.0055f;
 
 // HC-SR04: monitor the gap to Robot 1. 8 cm is only a final collision guard.
 const int ULTRASONIC_TRIG = 2;
@@ -260,6 +268,7 @@ float updateOnePid(
   float actual,
   float& integral,
   float& previousError,
+  float staticFeedforward,
   float dt
 ) {
   if (fabs(target) < RPM_DEADBAND) {
@@ -272,7 +281,9 @@ float updateOnePid(
   integral = clampFloat(integral + error * dt, -INTEGRAL_LIMIT, INTEGRAL_LIMIT);
   float derivative = dt > 0.0f ? (error - previousError) / dt : 0.0f;
   previousError = error;
-  float output = target / MOTOR_REFERENCE_RPM + KP * error + KI * integral + KD * derivative;
+  float directionFeedforward = target > 0.0f ? staticFeedforward : -staticFeedforward;
+  float output = target / MOTOR_REFERENCE_RPM + directionFeedforward
+               + KP * error + KI * integral + KD * derivative;
   return clampFloat(output, -MAX_PWM, MAX_PWM);
 }
 
@@ -299,10 +310,10 @@ void updateControl() {
   previousCountRR = countRR;
 
   float dt = (float)elapsedMs / 1000.0f;
-  float requestedFL = updateOnePid(targetFL, rpmFL, integralFL, previousErrorFL, dt);
-  float requestedFR = updateOnePid(targetFR, rpmFR, integralFR, previousErrorFR, dt);
-  float requestedRL = updateOnePid(targetRL, rpmRL, integralRL, previousErrorRL, dt);
-  float requestedRR = updateOnePid(targetRR, rpmRR, integralRR, previousErrorRR, dt);
+  float requestedFL = updateOnePid(targetFL, rpmFL, integralFL, previousErrorFL, STATIC_FF_FL, dt);
+  float requestedFR = updateOnePid(targetFR, rpmFR, integralFR, previousErrorFR, STATIC_FF_FR, dt);
+  float requestedRL = updateOnePid(targetRL, rpmRL, integralRL, previousErrorRL, STATIC_FF_RL, dt);
+  float requestedRR = updateOnePid(targetRR, rpmRR, integralRR, previousErrorRR, STATIC_FF_RR, dt);
   pwmFL = slewPwm(pwmFL, requestedFL);
   pwmFR = slewPwm(pwmFR, requestedFR);
   pwmRL = slewPwm(pwmRL, requestedRL);
