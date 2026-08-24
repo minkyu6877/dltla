@@ -2,6 +2,8 @@
 
 Raspberry Pi 한 대가 QR을 인식하고 Wi-Fi/UDP로 두 대의 ESP32 메카넘 로봇을 제어하는 프로젝트입니다. 현재 저장소에는 실제 구동에 사용하는 코드만 정리했습니다. UWB 위치 제어는 하드웨어 검증 후 이 구조에 추가할 예정입니다.
 
+최근 RPM 보정 결과와 다음 실험 항목은 [CALIBRATION_STATUS.md](CALIBRATION_STATUS.md)에 기록합니다.
+
 ## 현재 기능
 
 - QR 종류에 따라 로봇 1대 또는 2대 선택 및 경로 실행
