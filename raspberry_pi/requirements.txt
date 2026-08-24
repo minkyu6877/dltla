@@ -1,0 +1,2 @@
+# Raspberry Pi OS에서는 `sudo apt install python3-opencv` 설치를 권장합니다.
+opencv-python>=4.8

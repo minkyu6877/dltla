@@ -1,0 +1,19 @@
+# Local network credentials
+firmware/**/secrets.h
+
+# Per-network Raspberry Pi settings
+raspberry_pi/config.json
+
+# Generated data and Python files
+experiment_results/
+**/experiment_results/
+*.csv
+__pycache__/
+*.py[cod]
+.venv/
+
+# Editor and OS files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

@@ -1,0 +1,64 @@
+{
+  "robot_ips": [
+    "192.168.0.101",
+    "192.168.0.102"
+  ],
+  "command_port": 4210,
+  "status_port": 4212,
+  "command_hz": 10.0,
+  "manual_linear_speed": 0.15,
+  "manual_rotation_speed": 0.15,
+  "manual_speed_step": 0.02,
+  "manual_min_speed": 0.05,
+  "manual_max_speed": 0.50,
+  "manual_deadman_sec": 0.70,
+  "web_port": 8080,
+  "web_deadman_sec": 0.45,
+  "mecanum_wheelbase_cm": 19.4,
+  "mecanum_track_cm": 30.0,
+  "orbit_center_offset_cm": 19.4,
+  "orbit_distance_kp": 0.012,
+  "orbit_radial_max_speed": 0.08,
+  "orbit_yaw_rpm_kp": 0.002,
+  "orbit_yaw_correction_max": 0.04,
+  "orbit_min_gap_cm": 10.0,
+  "orbit_max_gap_cm": 150.0,
+  "experiment_web_port": 8081,
+  "experiment_rpm_speeds": [0.05, 0.10, 0.15],
+  "experiment_rpm_warmup_sec": 3.0,
+  "experiment_rpm_sample_sec": 5.0,
+  "experiment_rest_sec": 1.0,
+  "experiment_max_straight_sec": 30.0,
+  "experiment_max_orbit_sec": 60.0,
+  "obstacle_forward_speed": 0.15,
+  "stable_frames": 3,
+  "rearm_empty_frames": 5,
+  "camera_backend": "opencv",
+  "camera_index": 0,
+  "frame_width": 1280,
+  "frame_height": 720,
+  "cargo_robot_counts": {
+    "SMALL_BOX": 1,
+    "LONG_BOX": 2,
+    "WIDE_BOX": 2,
+    "HEAVY_BOX": 2
+  },
+  "routes": {
+    "A": [
+      {"state": "A_START_WAIT", "vx": 0.0, "vy": 0.0, "w": 0.0, "duration_sec": 0.8},
+      {"state": "A_FORWARD", "vx": 0.25, "vy": 0.0, "w": 0.0, "duration_sec": 3.0}
+    ],
+    "B": [
+      {"state": "B_START_WAIT", "vx": 0.0, "vy": 0.0, "w": 0.0, "duration_sec": 0.8},
+      {"state": "B_FORWARD", "vx": 0.25, "vy": 0.0, "w": 0.0, "duration_sec": 3.0}
+    ],
+    "C": [
+      {"state": "C_START_WAIT", "vx": 0.0, "vy": 0.0, "w": 0.0, "duration_sec": 0.8},
+      {"state": "C_FORWARD", "vx": 0.25, "vy": 0.0, "w": 0.0, "duration_sec": 3.0}
+    ],
+    "D": [
+      {"state": "D_START_WAIT", "vx": 0.0, "vy": 0.0, "w": 0.0, "duration_sec": 0.8},
+      {"state": "D_FORWARD", "vx": 0.25, "vy": 0.0, "w": 0.0, "duration_sec": 3.0}
+    ]
+  }
+}
