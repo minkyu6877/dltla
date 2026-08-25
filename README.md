@@ -17,6 +17,7 @@ Raspberry Pi 한 대가 QR을 인식하고 Wi-Fi/UDP로 두 대의 ESP32 메카�
 - RPM·1 m 직진·공전 실험과 CSV 기록
 - 1초 이상 명령이 끊기면 ESP32가 자동 정지
 - DW1000 앵커 4개의 안테나 지연값 자동 캘리브레이션 및 JSON 저장
+- 4앵커 UWB 태그 위치 계산, Wi-Fi/UDP 전송 및 고정 화면 모니터
 
 ## 파일 구성
 
@@ -37,6 +38,9 @@ uwb_calibration/
   README.md                       설치·배치·실험 절차
 tools/
   uwb_calibration_wizard.py       PC/라즈베리파이 자동 보정 도우미
+uwb_localization/
+  tag_position_sender/            로봇 장착 UWB 태그 위치 송신 코드
+  README.md                       4 m x 3 m 배치 및 위치 검증 절차
 ```
 
 이전 테스트 코드, 중복 펌웨어, 측정 CSV, 보고서와 외부 UWB 예제 전체는 저장소에서 제외했습니다.
@@ -142,3 +146,5 @@ python3 robot_experiment_gui.py
 ## UWB 캘리브레이션
 
 4개 앵커를 같은 기준 태그로 한 개씩 자동 보정하는 방법은 [uwb_calibration/README.md](uwb_calibration/README.md)를 따릅니다. 자동 군집 주행 전에 안테나 지연값 보정과 4 m x 3 m 시험장 좌표 검증을 먼저 끝내야 합니다.
+
+보정 완료 후 태그의 실시간 위치를 라즈베리파이에서 확인하는 방법은 [uwb_localization/README.md](uwb_localization/README.md)를 따릅니다.

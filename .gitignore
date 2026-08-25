@@ -1,5 +1,6 @@
 # Local network credentials
 firmware/**/secrets.h
+uwb_localization/**/secrets.h
 
 # Per-network Raspberry Pi settings
 raspberry_pi/config.json
@@ -13,6 +14,7 @@ __pycache__/
 .venv/
 .compile/
 uwb_calibration_results.json
+uwb_position_log*.csv
 
 # ROS 2 generated output and local snapshots
 build/
