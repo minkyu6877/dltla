@@ -332,6 +332,7 @@
 
   <!-- Gazebo와 ros2_control 연결 -->
   <gazebo>
+    <static>true</static>
     <plugin filename="libgz_ros2_control-system.so"
             name="gz_ros2_control::GazeboSimROS2ControlPlugin">
       <parameters>__CONTROLLER_CONFIG__</parameters>

@@ -70,7 +70,7 @@ def generate_launch_description():
         package='ros_gz_bridge',
         executable='parameter_bridge',
         arguments=[
-            '/world/warehouse_l_shape/set_pose@ros_gz_interfaces/srv/SetEntityPose@gz.msgs.Pose'
+            '/world/warehouse_l_shape/set_pose@ros_gz_interfaces/srv/SetEntityPose'
         ],
         output='screen'
     )
@@ -233,32 +233,7 @@ def generate_launch_description():
         ),
 
         TimerAction(
-            period=12.0,
-            actions=[robot1_jsb]
-        ),
-
-        TimerAction(
-            period=14.0,
-            actions=[robot2_jsb]
-        ),
-
-        TimerAction(
-            period=16.0,
-            actions=[robot1_mecanum]
-        ),
-
-        TimerAction(
-            period=18.0,
-            actions=[robot2_mecanum]
-        ),
-
-        TimerAction(
-            period=20.0,
-            actions=[uwb_simulator]
-        ),
-
-        TimerAction(
-            period=21.0,
+            period=6.0,
             actions=[
                 pose_bridge,
                 Node(
@@ -271,12 +246,12 @@ def generate_launch_description():
         ),
 
         TimerAction(
-            period=22.0,
+            period=7.0,
             actions=[mission_manager]
         ),
 
         TimerAction(
-            period=24.0,
+            period=9.0,
             actions=[qr_reader]
         ),
     ])
