@@ -99,7 +99,9 @@ class KinematicVisualizer(Node):
             desired_heading = math.atan2(leader_command.y, leader_command.x)
         heading_error = self.normalize_angle(
             desired_heading - self.headings['robot1'])
-        if self.following and leader_moving and not self.turning and \
+        reversing = self.following and leader_moving and abs(
+            abs(heading_error) - math.pi) < math.radians(5.0)
+        if self.following and leader_moving and not reversing and not self.turning and \
                 abs(heading_error) > math.radians(2.0):
             self.turning = True
             self.turn_target = desired_heading
@@ -107,7 +109,8 @@ class KinematicVisualizer(Node):
         if self.turning:
             self.advance_turn(dt)
         else:
-            self.advance_leader(leader_command, dt)
+            self.advance_leader(
+                leader_command, dt, update_heading=not reversing)
             if self.following:
                 self.place_follower_behind_leader()
 
@@ -116,7 +119,7 @@ class KinematicVisualizer(Node):
             self.update_model_pose(robot)
         self.publish_gap()
 
-    def advance_leader(self, command, dt):
+    def advance_leader(self, command, dt, update_heading=True):
         position = self.positions['robot1']
         position[0] = min(self.MAP_X[1], max(
             self.MAP_X[0], position[0] + command.x * dt))
@@ -125,7 +128,7 @@ class KinematicVisualizer(Node):
         if self.current_target is not None and math.dist(
                 position, self.current_target) <= self.TARGET_SNAP_DISTANCE:
             position[:] = self.current_target
-        if math.hypot(command.x, command.y) > 0.001:
+        if update_heading and math.hypot(command.x, command.y) > 0.001:
             self.headings['robot1'] = math.atan2(command.y, command.x)
 
     def advance_turn(self, dt):

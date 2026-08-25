@@ -29,6 +29,8 @@ missions:
       - [2.20, 0.75]  # loading zone
       - [3.25, 0.75]  # lower-right pivot center
       - [3.25, 2.20]  # upper-right pivot center
+      - [3.55, 2.55]  # green destination; stop here for unloading
+      - [3.25, 2.20]  # reverse to the safe pivot center
       - [0.75, 2.20]  # upper-left pivot center
       - [0.75, 0.75]  # lower-left pivot center
       - [0.99, 0.75]  # leader standby; follower finishes at x=0.46

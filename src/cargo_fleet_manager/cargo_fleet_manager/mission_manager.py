@@ -28,6 +28,8 @@ class MissionManager(Node):
     # margin so the two simulated robots never enter contact distance.
     MIN_ROBOT_SEPARATION = 0.44
     LOADING_POINT = (2.20, 0.75)
+    GREEN_DESTINATION = (3.55, 2.55)
+    DESTINATION_DWELL_SECONDS = 2.0
     DEFAULT_HOME_POSITIONS = {
         'robot1': (0.99, 0.75),
         'robot2': (0.46, 0.75),
@@ -93,6 +95,7 @@ class MissionManager(Node):
         self.robot_count = 0
         self.assigned_robots = []
         self.waypoint_index = 0
+        self.destination_dwell_start = None
         self.last_safety_reason = None
         self.last_proximity_reason = None
         self.delivery_request = None
@@ -197,6 +200,7 @@ class MissionManager(Node):
         self.robot_count = mission['robots']
         self.assigned_robots = list(self.ROBOTS[:self.robot_count])
         self.waypoint_index = 0
+        self.destination_dwell_start = None
         self.last_safety_reason = None
         self.last_proximity_reason = None
         self.state = 'RUNNING'
@@ -237,6 +241,7 @@ class MissionManager(Node):
         self.route = []
         self.delivery_request = {'destination': destination}
         self.waypoint_index = 0
+        self.destination_dwell_start = None
         self.last_safety_reason = None
         self.last_proximity_reason = None
         self.state = 'RUNNING'
@@ -382,6 +387,7 @@ class MissionManager(Node):
     def start_homing(self, reason):
         """Send each robot to its own standby slot after UWB is available."""
         self.state = 'HOMING'
+        self.destination_dwell_start = None
         self.mission_id = None
         self.route = []
         self.robot_count = 0
@@ -597,6 +603,21 @@ class MissionManager(Node):
         # Only assigned robots are awaited. SMALL missions never wait for robot2.
         if not self.assigned_robots_at_goal():
             return
+        goal = self.route[self.waypoint_index]
+        if math.dist(goal, self.GREEN_DESTINATION) <= 1e-6:
+            now = self.get_clock().now()
+            if self.destination_dwell_start is None:
+                self.destination_dwell_start = now
+                self.stop_all()
+                self.get_logger().info(
+                    'GREEN DESTINATION REACHED; unloading for 2.0 seconds')
+                return
+            dwell_age = (
+                now - self.destination_dwell_start).nanoseconds / 1e9
+            if dwell_age < self.DESTINATION_DWELL_SECONDS:
+                self.stop_all()
+                return
+            self.destination_dwell_start = None
         self.get_logger().info(
             f'{self.mission_id}: waypoint {self.waypoint_index + 1} reached')
         self.stop_all()
