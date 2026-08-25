@@ -1,6 +1,6 @@
 control:
   tolerance: 0.08
-  max_velocity: 0.30
+  max_velocity: 0.12
   uwb_timeout: 0.50
   control_rate_hz: 20.0
   # Robot-specific standby slots.  Change only these values when the
