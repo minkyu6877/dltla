@@ -29,9 +29,10 @@ def generate_launch_description():
 
     # Work around a Jazzy gz_ros2_control bug that drops nested parameter
     # file paths when forwarding controller node arguments.
-    gazebo_controller_config = os.path.join(
-        tempfile.gettempdir(), 'cargo_robot_controller.yaml'
-    )
+    temporary_config = tempfile.NamedTemporaryFile(
+        prefix='cargo_robot_controller_', suffix='.yaml', delete=False)
+    gazebo_controller_config = temporary_config.name
+    temporary_config.close()
     shutil.copyfile(controller_config, gazebo_controller_config)
     atexit.register(
         lambda: os.path.exists(gazebo_controller_config)
