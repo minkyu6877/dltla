@@ -20,8 +20,8 @@
 
     kinematics:
       base_frame_offset: {x: 0.0, y: 0.0, theta: 0.0}
-      wheels_radius: 0.1
-      sum_of_robot_center_projection_on_X_Y_axis: 0.625
+      wheels_radius: 0.05
+      sum_of_robot_center_projection_on_X_Y_axis: 0.16
 
     base_frame_id: "base_link"
     odom_frame_id: "odom"
