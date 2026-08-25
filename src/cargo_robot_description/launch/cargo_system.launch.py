@@ -224,33 +224,37 @@ def generate_launch_description():
         ),
 
         TimerAction(
-            period=8.0,
-            actions=[
-                robot1_jsb,
-                robot2_jsb
-            ]
+            period=12.0,
+            actions=[robot1_jsb]
         ),
 
         TimerAction(
-            period=9.0,
-            actions=[
-                robot1_mecanum,
-                robot2_mecanum
-            ]
+            period=14.0,
+            actions=[robot2_jsb]
         ),
 
         TimerAction(
-            period=10.0,
+            period=16.0,
+            actions=[robot1_mecanum]
+        ),
+
+        TimerAction(
+            period=18.0,
+            actions=[robot2_mecanum]
+        ),
+
+        TimerAction(
+            period=20.0,
             actions=[uwb_simulator]
         ),
 
         TimerAction(
-            period=11.0,
+            period=21.0,
             actions=[mission_manager]
         ),
 
         TimerAction(
-            period=13.0,
+            period=23.0,
             actions=[qr_reader]
         ),
     ])
