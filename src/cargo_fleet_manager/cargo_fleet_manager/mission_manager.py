@@ -23,11 +23,11 @@ class MissionManager(Node):
     # through a rack even though the controller itself only follows points.
     # Test layout: empty floor. Add shelf rectangles here for obstacle tests.
     OBSTACLES = ()
-    MAP_BOUNDS = (0.15, 4.85, 0.15, 4.85)
+    MAP_BOUNDS = (0.15, 3.85, 0.15, 2.85)
     GRID_SIZE = 0.10
     ROBOT_CLEARANCE = 0.28
     LOADING_POINT = (0.60, 0.50)
-    STANDBY_POINT = (2.50, 0.40)
+    STANDBY_POINT = (2.00, 0.40)
 
     def __init__(self):
         super().__init__('mission_manager')

@@ -10,13 +10,13 @@
     <plugin filename="gz-sim-user-commands-system" name="gz::sim::systems::UserCommands"/>
     <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster"/>
     <light type="directional" name="sun"><pose>2 1.5 8 0 0 0</pose><direction>-0.5 0.1 -1</direction></light>
-    <!-- Coordinate convention: lower-left corner is (0, 0); map is 5 m x 5 m. -->
-    <model name="floor"><static>true</static><pose>2.5 2.5 -0.05 0 0 0</pose><link name="link"><collision name="collision"><geometry><box><size>5 5 0.1</size></box></geometry></collision><visual name="visual"><geometry><box><size>5 5 0.1</size></box></geometry><material><diffuse>0.82 0.82 0.82 1</diffuse></material></visual></link></model>
+    <!-- Coordinate convention: lower-left corner is (0, 0); test map is 4 m x 3 m. -->
+    <model name="floor"><static>true</static><pose>2 1.5 -0.05 0 0 0</pose><link name="link"><collision name="collision"><geometry><box><size>4 3 0.1</size></box></geometry></collision><visual name="visual"><geometry><box><size>4 3 0.1</size></box></geometry><material><diffuse>0.82 0.82 0.82 1</diffuse></material></visual></link></model>
 
     <!-- Yellow: robot standby / return. Blue: cargo loading. Green: destination. -->
-    <model name="standby_zone"><static>true</static><pose>2.5 0.40 0.011 0 0 0</pose><link name="link"><visual name="visual"><geometry><box><size>1.4 0.60 0.02</size></box></geometry><material><diffuse>1 0.75 0.05 0.9</diffuse></material></visual></link></model>
+    <model name="standby_zone"><static>true</static><pose>2.0 0.40 0.011 0 0 0</pose><link name="link"><visual name="visual"><geometry><box><size>1.4 0.60 0.02</size></box></geometry><material><diffuse>1 0.75 0.05 0.9</diffuse></material></visual></link></model>
     <model name="loading_zone"><static>true</static><pose>0.60 0.50 0.011 0 0 0</pose><link name="link"><visual name="visual"><geometry><box><size>1.2 0.70 0.02</size></box></geometry><material><diffuse>0.1 0.35 0.95 0.85</diffuse></material></visual></link></model>
-    <model name="destination_zone"><static>true</static><pose>4.20 4.00 0.011 0 0 0</pose><link name="link"><visual name="visual"><geometry><box><size>1.2 0.70 0.02</size></box></geometry><material><diffuse>0.15 0.8 0.25 0.85</diffuse></material></visual></link></model>
+    <model name="destination_zone"><static>true</static><pose>3.40 2.40 0.011 0 0 0</pose><link name="link"><visual name="visual"><geometry><box><size>1.2 0.70 0.02</size></box></geometry><material><diffuse>0.15 0.8 0.25 0.85</diffuse></material></visual></link></model>
 
   </world>
 </sdf>
