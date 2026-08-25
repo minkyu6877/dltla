@@ -25,7 +25,7 @@ class MissionManager(Node):
     OBSTACLES = ()
     MAP_BOUNDS = (0.15, 3.85, 0.15, 2.85)
     GRID_SIZE = 0.10
-    ROBOT_CLEARANCE = 0.22
+    ROBOT_CLEARANCE = 0.28
     LOADING_POINT = (0.40, 0.35)
     STANDBY_POINT = (2.00, 0.30)
 
