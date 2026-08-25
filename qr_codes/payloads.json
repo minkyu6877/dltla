@@ -1,6 +1,4 @@
 [
   "{\"command\":\"DELIVERY\",\"cargo_type\":\"SMALL_BOX\",\"weight_kg\":2.0,\"dest_x\":3.2,\"dest_y\":2.6}",
-  "{\"command\":\"DELIVERY\",\"cargo_type\":\"LONG_BOX\",\"weight_kg\":8.0,\"dest_x\":3.2,\"dest_y\":2.6}",
-  "{\"command\":\"DELIVERY\",\"cargo_type\":\"SMALL_BOX\",\"weight_kg\":2.0,\"dest_x\":3.2,\"dest_y\":1.0}",
-  "{\"command\":\"DELIVERY\",\"cargo_type\":\"LONG_BOX\",\"weight_kg\":8.0,\"dest_x\":3.2,\"dest_y\":1.0}"
+  "{\"command\":\"DELIVERY\",\"cargo_type\":\"LONG_BOX\",\"weight_kg\":8.0,\"dest_x\":3.2,\"dest_y\":2.6}"
 ]

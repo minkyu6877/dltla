@@ -8,10 +8,8 @@ from PIL import Image, ImageDraw, ImageFont
 
 
 CARDS = (
-    ("01_SMALL_A", "소형 화물 | 목적지 A", "SMALL / 1대", 3.20, 2.60, "SMALL_BOX", 2.0),
-    ("02_LONG_A", "장형 화물 | 목적지 A", "LONG / 2대", 3.20, 2.60, "LONG_BOX", 8.0),
-    ("03_SMALL_B", "소형 화물 | 목적지 B", "SMALL / 1대", 3.20, 1.00, "SMALL_BOX", 2.0),
-    ("04_LONG_B", "장형 화물 | 목적지 B", "LONG / 2대", 3.20, 1.00, "LONG_BOX", 8.0),
+    ("01_SMALL_DELIVERY", "소형 화물 | 공통 목적지", "SMALL / 로봇 1대", 3.20, 2.60, "SMALL_BOX", 2.0),
+    ("02_LONG_DELIVERY", "장형 화물 | 공통 목적지", "LONG / 로봇 2대", 3.20, 2.60, "LONG_BOX", 8.0),
 )
 
 
