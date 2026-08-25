@@ -3,8 +3,13 @@
 import json
 from pathlib import Path
 
-import qrcode
 from PIL import Image, ImageDraw, ImageFont
+
+try:
+    import qrcode
+except ImportError:
+    qrcode = None
+    import cv2
 
 
 CARDS = (
@@ -33,7 +38,14 @@ def create_card(card, output_dir):
         "dest_y": y,
     }
     encoded = json.dumps(payload, separators=(",", ":"))
-    qr = qrcode.make(encoded).convert("RGB").resize((720, 720))
+    if qrcode is not None:
+        qr = qrcode.make(encoded).convert("RGB")
+    else:
+        # ROS images already depend on OpenCV.  Use it when the optional
+        # qrcode package is unavailable on a Raspberry Pi or Ubuntu host.
+        matrix = cv2.QRCodeEncoder_create().encode(encoded)
+        qr = Image.fromarray(matrix).convert("RGB")
+    qr = qr.resize((720, 720), Image.Resampling.NEAREST)
     image = Image.new("RGB", (800, 1020), "white")
     image.paste(qr, (40, 220))
     draw = ImageDraw.Draw(image)
