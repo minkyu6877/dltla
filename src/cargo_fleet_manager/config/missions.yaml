@@ -1,6 +1,7 @@
 control:
   tolerance: 0.08
-  max_velocity: 0.12
+  # 0.25 km/h = 0.0694 m/s.  Use this as the visual and real mission limit.
+  max_velocity: 0.0694
   uwb_timeout: 0.50
   control_rate_hz: 20.0
   # Robot-specific standby slots.  Change only these values when the
