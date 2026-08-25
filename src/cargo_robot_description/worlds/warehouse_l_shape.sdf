@@ -15,7 +15,7 @@
 
     <!-- Yellow: robot standby / return. Blue: cargo loading. Green: destination. -->
     <model name="standby_zone"><static>true</static><pose>0.72 0.425 0.011 0 0 0</pose><link name="link"><visual name="visual"><geometry><box><size>1.10 0.55 0.02</size></box></geometry><material><diffuse>1 0.75 0.05 0.9</diffuse></material></visual></link></model>
-    <model name="loading_zone"><static>true</static><pose>2.80 0.50 0.011 0 0 0</pose><link name="link"><visual name="visual"><geometry><box><size>0.90 0.70 0.02</size></box></geometry><material><diffuse>0.1 0.35 0.95 0.85</diffuse></material></visual></link></model>
+    <model name="loading_zone"><static>true</static><pose>2.20 0.50 0.011 0 0 0</pose><link name="link"><visual name="visual"><geometry><box><size>0.90 0.70 0.02</size></box></geometry><material><diffuse>0.1 0.35 0.95 0.85</diffuse></material></visual></link></model>
     <model name="destination_zone"><static>true</static><pose>3.55 2.55 0.011 0 0 0</pose><link name="link"><visual name="visual"><geometry><box><size>0.50 0.40 0.02</size></box></geometry><material><diffuse>0.15 0.8 0.25 0.85</diffuse></material></visual></link></model>
 
   </world>
