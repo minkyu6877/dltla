@@ -21,10 +21,8 @@ class MissionManager(Node):
     # These rectangles match the shelves in warehouse_l_shape.sdf.  They are
     # enlarged by the robot clearance before planning, so commands never aim
     # through a rack even though the controller itself only follows points.
-    OBSTACLES = (
-        (0.95, 1.45, 0.70, 2.40),
-        (2.10, 3.10, 1.70, 2.20),
-    )
+    # Test layout: empty floor. Add shelf rectangles here for obstacle tests.
+    OBSTACLES = ()
     MAP_BOUNDS = (0.15, 3.85, 0.15, 2.85)
     GRID_SIZE = 0.10
     ROBOT_CLEARANCE = 0.22
