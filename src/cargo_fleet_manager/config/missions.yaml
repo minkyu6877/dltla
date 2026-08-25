@@ -8,8 +8,8 @@ control:
   # physical standby marking moves on the floor.
   home_positions:
     # 0.23 m-long bodies leave a 0.30 m front/back ultrasonic gap.
-    robot1: [0.99, 0.40]
-    robot2: [0.46, 0.40]
+    robot1: [0.99, 0.75]
+    robot2: [0.46, 0.75]
   # Both robots wait facing the loading area on the right (+X direction).
   standby_heading_deg: 0.0
   # Robot 2 has no UWB in the real fleet.  Its IMU/encoders execute the
@@ -26,12 +26,12 @@ missions:
   CORNER_DEMO:
     robots: 2
     route:
-      - [2.20, 0.50]  # loading zone
-      - [3.45, 0.50]  # lower-right corner
-      - [3.45, 2.55]  # upper-right corner
-      - [0.46, 2.55]  # upper-left corner
-      - [0.46, 0.40]  # lower-left corner
-      - [0.99, 0.40]  # leader standby; follower finishes at x=0.46
+      - [2.20, 0.75]  # loading zone
+      - [3.25, 0.75]  # lower-right pivot center
+      - [3.25, 2.20]  # upper-right pivot center
+      - [0.75, 2.20]  # upper-left pivot center
+      - [0.75, 0.75]  # lower-left pivot center
+      - [0.99, 0.75]  # leader standby; follower finishes at x=0.46
 
   SMALL_A:
     robots: 1

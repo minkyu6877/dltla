@@ -27,10 +27,10 @@ class MissionManager(Node):
     # The body plus wheels occupy about 0.35 m across.  Keep an additional
     # margin so the two simulated robots never enter contact distance.
     MIN_ROBOT_SEPARATION = 0.44
-    LOADING_POINT = (2.20, 0.50)
+    LOADING_POINT = (2.20, 0.75)
     DEFAULT_HOME_POSITIONS = {
-        'robot1': (0.99, 0.40),
-        'robot2': (0.46, 0.40),
+        'robot1': (0.99, 0.75),
+        'robot2': (0.46, 0.75),
     }
 
     def __init__(self):

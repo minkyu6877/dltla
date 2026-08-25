@@ -18,13 +18,13 @@ class KinematicVisualizer(Node):
     """
 
     ROBOTS = ('robot1', 'robot2')
-    HOME_POSITIONS = {'robot1': (0.99, 0.40), 'robot2': (0.46, 0.40)}
+    HOME_POSITIONS = {'robot1': (0.99, 0.75), 'robot2': (0.46, 0.75)}
     MAP_X = (0.12, 3.88)
     MAP_Y = (0.12, 2.88)
     BODY_LENGTH = 0.23
     TARGET_CENTER_DISTANCE = 0.53
-    PATH_SAMPLE_DISTANCE = 0.005
     TARGET_SNAP_DISTANCE = 0.02
+    TURN_RATE = math.radians(45.0)
 
     def __init__(self):
         super().__init__('kinematic_visualizer')
@@ -33,12 +33,9 @@ class KinematicVisualizer(Node):
         }
         self.headings = {robot: 0.0 for robot in self.ROBOTS}
         self.commands = {robot: TwistStamped() for robot in self.ROBOTS}
-        self.leader_path = [
-            tuple(self.positions['robot2']),
-            tuple(self.positions['robot1']),
-        ]
         self.following = False
-        self.stationary_time = 0.0
+        self.turning = False
+        self.turn_target = 0.0
         self.current_target = None
         self.pending = {robot: None for robot in self.ROBOTS}
         self.pose_clients = {
@@ -81,12 +78,9 @@ class KinematicVisualizer(Node):
         }
         self.headings = {robot: 0.0 for robot in self.ROBOTS}
         self.commands = {robot: TwistStamped() for robot in self.ROBOTS}
-        self.leader_path = [
-            tuple(self.positions['robot2']),
-            tuple(self.positions['robot1']),
-        ]
         self.following = False
-        self.stationary_time = 0.0
+        self.turning = False
+        self.turn_target = 0.0
 
     def step(self):
         now = self.get_clock().now()
@@ -100,26 +94,22 @@ class KinematicVisualizer(Node):
         self.following = math.hypot(
             follower_command.x, follower_command.y) > 0.001
 
-        self.advance_leader(leader_command, dt)
-        if leader_moving and math.dist(
-                self.leader_path[-1], self.positions['robot1']) >= self.PATH_SAMPLE_DISTANCE:
-            self.leader_path.append(tuple(self.positions['robot1']))
+        desired_heading = self.headings['robot1']
+        if leader_moving:
+            desired_heading = math.atan2(leader_command.y, leader_command.x)
+        heading_error = self.normalize_angle(
+            desired_heading - self.headings['robot1'])
+        if self.following and leader_moving and not self.turning and \
+                abs(heading_error) > math.radians(2.0):
+            self.turning = True
+            self.turn_target = desired_heading
 
-        if self.following:
-            previous = tuple(self.positions['robot2'])
-            target = self.follower_target()
-            self.positions['robot2'][:] = target
-            dx, dy = target[0] - previous[0], target[1] - previous[1]
-            if math.hypot(dx, dy) > 0.0001:
-                self.headings['robot2'] = math.atan2(dy, dx)
-            self.stationary_time = 0.0
-        elif not leader_moving:
-            self.stationary_time += dt
-            if self.stationary_time >= 0.5:
-                self.leader_path = [
-                    tuple(self.positions['robot2']),
-                    tuple(self.positions['robot1']),
-                ]
+        if self.turning:
+            self.advance_turn(dt)
+        else:
+            self.advance_leader(leader_command, dt)
+            if self.following:
+                self.place_follower_behind_leader()
 
         for robot in self.ROBOTS:
             self.publish_position(robot, now)
@@ -138,21 +128,34 @@ class KinematicVisualizer(Node):
         if math.hypot(command.x, command.y) > 0.001:
             self.headings['robot1'] = math.atan2(command.y, command.x)
 
-    def follower_target(self):
-        """Return the point 0.53 m behind Robot 1 along its travelled path."""
-        remaining = self.TARGET_CENTER_DISTANCE
-        current = tuple(self.positions['robot1'])
-        for previous in reversed(self.leader_path):
-            segment = math.dist(current, previous)
-            if segment >= remaining and segment > 0.0:
-                ratio = remaining / segment
-                return [
-                    current[0] + (previous[0] - current[0]) * ratio,
-                    current[1] + (previous[1] - current[1]) * ratio,
-                ]
-            remaining -= segment
-            current = previous
-        return list(self.leader_path[0])
+    def advance_turn(self, dt):
+        """Rotate Robot 1 in place while Robot 2 sweeps the larger rear arc."""
+        error = self.normalize_angle(self.turn_target - self.headings['robot1'])
+        step = min(abs(error), self.TURN_RATE * dt)
+        if error < 0.0:
+            step = -step
+        self.headings['robot1'] = self.normalize_angle(
+            self.headings['robot1'] + step)
+        self.headings['robot2'] = self.headings['robot1']
+        self.place_follower_behind_leader()
+        if abs(error) <= self.TURN_RATE * dt + 1e-6:
+            self.headings['robot1'] = self.turn_target
+            self.headings['robot2'] = self.turn_target
+            self.place_follower_behind_leader()
+            self.turning = False
+
+    def place_follower_behind_leader(self):
+        heading = self.headings['robot1']
+        leader = self.positions['robot1']
+        self.positions['robot2'][0] = (
+            leader[0] - self.TARGET_CENTER_DISTANCE * math.cos(heading))
+        self.positions['robot2'][1] = (
+            leader[1] - self.TARGET_CENTER_DISTANCE * math.sin(heading))
+        self.headings['robot2'] = heading
+
+    @staticmethod
+    def normalize_angle(angle):
+        return (angle + math.pi) % (2.0 * math.pi) - math.pi
 
     def publish_position(self, robot, now):
         message = PointStamped()

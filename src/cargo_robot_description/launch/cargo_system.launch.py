@@ -110,7 +110,7 @@ def generate_launch_description():
             '-string', robot1_description,
             '-name', 'cargo_robot_1',
             '-x', '0.99',
-            '-y', '0.40',
+            '-y', '0.75',
             '-z', '0.02',
             '-Y', '0.0'
         ],
@@ -124,7 +124,7 @@ def generate_launch_description():
             '-string', robot2_description,
             '-name', 'cargo_robot_2',
             '-x', '0.46',
-            '-y', '0.40',
+            '-y', '0.75',
             '-z', '0.02',
             '-Y', '0.0'
         ],
