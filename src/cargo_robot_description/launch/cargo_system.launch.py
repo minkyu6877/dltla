@@ -100,8 +100,8 @@ def generate_launch_description():
             '-world', 'warehouse_l_shape',
             '-string', robot1_description,
             '-name', 'cargo_robot_1',
-            '-x', '1.80',
-            '-y', '0.30',
+            '-x', '2.30',
+            '-y', '0.40',
             '-z', '0.02'
         ],
         output='screen'
@@ -113,8 +113,8 @@ def generate_launch_description():
             '-world', 'warehouse_l_shape',
             '-string', robot2_description,
             '-name', 'cargo_robot_2',
-            '-x', '2.20',
-            '-y', '0.30',
+            '-x', '2.70',
+            '-y', '0.40',
             '-z', '0.02'
         ],
         output='screen'
