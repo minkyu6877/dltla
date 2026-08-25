@@ -4,15 +4,15 @@
 
 | 파일 | 화물 | 배정 로봇 | 목적지 좌표 |
 | --- | --- | --- | --- |
-| `01_SMALL_A.png` | 소형 상자 2 kg | 1대 | (4.0, 3.0) m |
-| `02_LONG_A.png` | 장형 상자 8 kg | 2대 | (4.0, 3.0) m |
-| `03_SMALL_B.png` | 소형 상자 2 kg | 1대 | (4.0, -0.5) m |
-| `04_LONG_B.png` | 장형 상자 8 kg | 2대 | (4.0, -0.5) m |
+| `01_SMALL_A.png` | 소형 상자 2 kg | 1대 | (3.20, 2.60) m |
+| `02_LONG_A.png` | 장형 상자 8 kg | 2대 | (3.20, 2.60) m |
+| `03_SMALL_B.png` | 소형 상자 2 kg | 1대 | (3.20, 1.00) m |
+| `04_LONG_B.png` | 장형 상자 8 kg | 2대 | (3.20, 1.00) m |
 
 QR 내부 데이터 형식은 다음과 같다. `dest_x`, `dest_y`를 바꾸면 새 목적지를 만들 수 있다.
 
 ```json
-{"command":"DELIVERY","cargo_type":"LONG_BOX","weight_kg":8.0,"dest_x":4.0,"dest_y":3.0}
+{"command":"DELIVERY","cargo_type":"LONG_BOX","weight_kg":8.0,"dest_x":3.20,"dest_y":2.60}
 ```
 
 새 카드는 `python3 tools/generate_delivery_qrs.py`로 다시 생성한다.

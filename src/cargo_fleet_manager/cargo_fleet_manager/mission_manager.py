@@ -22,16 +22,14 @@ class MissionManager(Node):
     # enlarged by the robot clearance before planning, so commands never aim
     # through a rack even though the controller itself only follows points.
     OBSTACLES = (
-        (-1.60, -0.90, -2.10, 4.30),
-        (-0.90, 3.20, 3.60, 4.30),
-        (-0.90, 3.20, 0.80, 1.50),
-        (-0.90, 3.20, -2.00, -1.30),
+        (0.95, 1.45, 0.70, 2.40),
+        (2.10, 3.10, 1.70, 2.20),
     )
-    MAP_LIMIT = 5.5
-    GRID_SIZE = 0.25
-    ROBOT_CLEARANCE = 0.45
-    LOADING_POINT = (-4.3, -3.7)
-    STANDBY_POINT = (0.0, -3.8)
+    MAP_BOUNDS = (0.15, 3.85, 0.15, 2.85)
+    GRID_SIZE = 0.10
+    ROBOT_CLEARANCE = 0.22
+    LOADING_POINT = (0.40, 0.35)
+    STANDBY_POINT = (2.00, 0.30)
 
     def __init__(self):
         super().__init__('mission_manager')
@@ -173,7 +171,9 @@ class MissionManager(Node):
         except (KeyError, TypeError, ValueError):
             self.get_logger().error('Delivery requires numeric dest_x and dest_y')
             return
-        if not all(abs(value) <= self.MAP_LIMIT for value in destination):
+        x_min, x_max, y_min, y_max = self.MAP_BOUNDS
+        if not (x_min <= destination[0] <= x_max and
+                y_min <= destination[1] <= y_max):
             self.get_logger().error('Destination is outside the warehouse map')
             return
         if self.is_blocked(*destination):
@@ -213,9 +213,9 @@ class MissionManager(Node):
     def plan_segment(self, start, goal):
         """A* route through the warehouse grid, reduced to corner waypoints."""
         step = self.GRID_SIZE
-        limit = int(self.MAP_LIMIT / step)
         to_cell = lambda point: (round(point[0] / step), round(point[1] / step))
         to_point = lambda cell: (cell[0] * step, cell[1] * step)
+        min_x, max_x, min_y, max_y = self.MAP_BOUNDS
         start_cell, goal_cell = to_cell(start), to_cell(goal)
         frontier = [(0.0, start_cell)]
         came_from = {start_cell: None}
@@ -226,7 +226,9 @@ class MissionManager(Node):
                 break
             for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
                 nxt = (current[0] + dx, current[1] + dy)
-                if abs(nxt[0]) > limit or abs(nxt[1]) > limit or self.is_blocked(*to_point(nxt)):
+                point = to_point(nxt)
+                if not (min_x <= point[0] <= max_x and min_y <= point[1] <= max_y) or \
+                        self.is_blocked(*point):
                     continue
                 new_cost = cost[current] + 1.0
                 if new_cost >= cost.get(nxt, float('inf')):
