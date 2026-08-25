@@ -26,10 +26,13 @@ class MissionManager(Node):
     MAP_BOUNDS = (0.15, 3.85, 0.15, 2.85)
     GRID_SIZE = 0.10
     ROBOT_CLEARANCE = 0.28
+    # The body plus wheels occupy about 0.35 m across.  Keep an additional
+    # margin so the two simulated robots never enter contact distance.
+    MIN_ROBOT_SEPARATION = 0.48
     LOADING_POINT = (0.60, 0.50)
     DEFAULT_HOME_POSITIONS = {
-        'robot1': (1.80, 0.40),
-        'robot2': (2.20, 0.40),
+        'robot1': (1.70, 0.40),
+        'robot2': (2.30, 0.40),
     }
 
     def __init__(self):
@@ -76,6 +79,7 @@ class MissionManager(Node):
         self.command_history = deque()
         self.follower_command = self.make_command(0.0, 0.0)
         self.last_safety_reason = None
+        self.last_proximity_reason = None
         self.delivery_request = None
         self.home_routes = {}
         self.home_waypoint_index = {}
@@ -172,6 +176,7 @@ class MissionManager(Node):
         self.command_history.clear()
         self.follower_command = self.make_command(0.0, 0.0)
         self.last_safety_reason = None
+        self.last_proximity_reason = None
         self.state = 'RUNNING'
         self.stop_all()
         self.get_logger().info(
@@ -215,6 +220,7 @@ class MissionManager(Node):
         self.command_history.clear()
         self.follower_command = self.make_command(0.0, 0.0)
         self.last_safety_reason = None
+        self.last_proximity_reason = None
         self.state = 'RUNNING'
         self.stop_all()
         self.get_logger().info(
@@ -309,6 +315,27 @@ class MissionManager(Node):
             for robot in self.ROBOTS:
                 self.stop_robot(robot)
 
+    def robots_too_close(self):
+        """Stop before the two robot footprints can overlap."""
+        robot1_position = self.position['robot1']
+        robot2_position = self.position['robot2']
+        if robot1_position is None or robot2_position is None:
+            return False
+        distance = math.dist(robot1_position, robot2_position)
+        if distance >= self.MIN_ROBOT_SEPARATION:
+            if self.last_proximity_reason is not None:
+                self.get_logger().info('Robot separation restored; motion resumed')
+                self.last_proximity_reason = None
+            return False
+        self.stop_all()
+        reason = (
+            f'ROBOT PROXIMITY STOP: separation={distance:.2f} m '
+            f'(minimum={self.MIN_ROBOT_SEPARATION:.2f} m)')
+        if reason != self.last_proximity_reason:
+            self.get_logger().warn(reason)
+            self.last_proximity_reason = reason
+        return True
+
     def positions_are_fresh(self):
         return self.positions_are_fresh_for(self.assigned_robots)
 
@@ -335,6 +362,7 @@ class MissionManager(Node):
         self.command_history.clear()
         self.follower_command = self.make_command(0.0, 0.0)
         self.last_safety_reason = None
+        self.last_proximity_reason = None
         self.delivery_request = None
         self.home_routes = {}
         self.home_waypoint_index = {robot: 0 for robot in self.ROBOTS}
@@ -369,6 +397,8 @@ class MissionManager(Node):
         if self.last_safety_reason is not None:
             self.get_logger().info('Fresh UWB restored; homing resumed')
             self.last_safety_reason = None
+        if self.robots_too_close():
+            return
 
         if not self.homing_planned:
             try:
@@ -480,6 +510,8 @@ class MissionManager(Node):
         if self.last_safety_reason is not None:
             self.get_logger().info('Fresh UWB restored; mission resumed')
             self.last_safety_reason = None
+        if self.robots_too_close():
+            return
 
         self.initialize_follower_offset()
         if self.delivery_request is not None and not self.route:

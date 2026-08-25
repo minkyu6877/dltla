@@ -6,8 +6,8 @@ control:
   # Robot-specific standby slots.  Change only these values when the
   # physical standby marking moves on the floor.
   home_positions:
-    robot1: [1.80, 0.40]
-    robot2: [2.20, 0.40]
+    robot1: [1.70, 0.40]
+    robot2: [2.30, 0.40]
 
 missions:
   SMALL_A:
