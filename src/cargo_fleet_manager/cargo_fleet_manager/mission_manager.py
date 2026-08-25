@@ -27,7 +27,10 @@ class MissionManager(Node):
     GRID_SIZE = 0.10
     ROBOT_CLEARANCE = 0.28
     LOADING_POINT = (0.60, 0.50)
-    STANDBY_POINT = (2.00, 0.40)
+    DEFAULT_HOME_POSITIONS = {
+        'robot1': (1.80, 0.40),
+        'robot2': (2.20, 0.40),
+    }
 
     def __init__(self):
         super().__init__('mission_manager')
@@ -44,6 +47,8 @@ class MissionManager(Node):
         rate = float(control.get('control_rate_hz', 20.0))
         if min(self.tolerance, self.max_velocity, self.uwb_timeout, rate) <= 0:
             raise ValueError('Control values in missions.yaml must be positive')
+        self.home_positions = self.load_home_positions(
+            control.get('home_positions'))
 
         self.position = {robot: None for robot in self.ROBOTS}
         self.position_time = {robot: None for robot in self.ROBOTS}
@@ -60,7 +65,7 @@ class MissionManager(Node):
             String, '/fleet/mission', self.mission_callback, 10)
         self.state_pub = self.create_publisher(String, '/fleet/state', 10)
 
-        self.state = 'STANDBY'
+        self.state = 'HOMING'
         self.mission_id = None
         self.route = []
         self.robot_count = 0
@@ -72,11 +77,14 @@ class MissionManager(Node):
         self.follower_command = self.make_command(0.0, 0.0)
         self.last_safety_reason = None
         self.delivery_request = None
+        self.home_routes = {}
+        self.home_waypoint_index = {}
+        self.homing_planned = False
 
         self.timer = self.create_timer(1.0 / rate, self.control_loop)
         self.get_logger().info(
             f'Ready: {len(self.missions)} missions loaded from {self.config_path}')
-        self.get_logger().info('State -> STANDBY; waiting on /fleet/mission')
+        self.start_homing('startup')
 
     @staticmethod
     def load_config(path):
@@ -114,6 +122,18 @@ class MissionManager(Node):
             }
         return missions, data.get('control', {}) or {}
 
+    @classmethod
+    def load_home_positions(cls, raw_positions):
+        raw_positions = raw_positions or cls.DEFAULT_HOME_POSITIONS
+        homes = {}
+        for robot in cls.ROBOTS:
+            point = raw_positions.get(robot) if isinstance(raw_positions, dict) else None
+            if not isinstance(point, (list, tuple)) or len(point) != 2:
+                raise ValueError(
+                    f'home_positions.{robot} must be [x, y] in missions.yaml')
+            homes[robot] = (float(point[0]), float(point[1]))
+        return homes
+
     def uwb_callback(self, msg, robot):
         self.position[robot] = (float(msg.point.x), float(msg.point.y))
         self.position_time[robot] = self.get_clock().now()
@@ -137,9 +157,9 @@ class MissionManager(Node):
             self.get_logger().error(
                 f'Unknown mission ID {mission_id!r}; robots remain stopped')
             return
-        if self.state == 'RUNNING':
+        if self.state != 'STANDBY':
             self.get_logger().warn(
-                f'Rejected {mission_id}: {self.mission_id} is already running')
+                f'Rejected {mission_id}: fleet is {self.state.lower()}')
             return
 
         self.mission_id = mission_id
@@ -161,8 +181,9 @@ class MissionManager(Node):
 
     def start_delivery(self, request):
         """Start standby -> loading -> requested destination -> standby."""
-        if self.state == 'RUNNING':
-            self.get_logger().warn('Rejected delivery: another mission is running')
+        if self.state != 'STANDBY':
+            self.get_logger().warn(
+                f'Rejected delivery: fleet is {self.state.lower()}')
             return
         try:
             destination = (float(request['dest_x']), float(request['dest_y']))
@@ -264,7 +285,7 @@ class MissionManager(Node):
         for segment_start, segment_goal in (
                 (start, self.LOADING_POINT),
                 (self.LOADING_POINT, destination),
-                (destination, self.STANDBY_POINT)):
+                (destination, self.home_positions['robot1'])):
             route.extend(self.plan_segment(segment_start, segment_goal))
         return route
 
@@ -289,8 +310,11 @@ class MissionManager(Node):
                 self.stop_robot(robot)
 
     def positions_are_fresh(self):
+        return self.positions_are_fresh_for(self.assigned_robots)
+
+    def positions_are_fresh_for(self, robots):
         now = self.get_clock().now()
-        for robot in self.assigned_robots:
+        for robot in robots:
             stamp = self.position_time[robot]
             if stamp is None:
                 return False, f'waiting for {robot} UWB'
@@ -298,6 +322,92 @@ class MissionManager(Node):
             if age > self.uwb_timeout:
                 return False, f'{robot} UWB stale ({age:.2f}s)'
         return True, None
+
+    def start_homing(self, reason):
+        """Send each robot to its own standby slot after UWB is available."""
+        self.state = 'HOMING'
+        self.mission_id = None
+        self.route = []
+        self.robot_count = 0
+        self.assigned_robots = []
+        self.waypoint_index = 0
+        self.follower_offset = None
+        self.command_history.clear()
+        self.follower_command = self.make_command(0.0, 0.0)
+        self.last_safety_reason = None
+        self.delivery_request = None
+        self.home_routes = {}
+        self.home_waypoint_index = {robot: 0 for robot in self.ROBOTS}
+        self.homing_planned = False
+        self.stop_all()
+        self.get_logger().info(
+            f'HOMING STARTED ({reason}); waiting for UWB before moving to '
+            f'robot1={self.home_positions["robot1"]}, '
+            f'robot2={self.home_positions["robot2"]}')
+
+    def at_point(self, robot, goal):
+        x, y = self.position[robot]
+        return math.hypot(goal[0] - x, goal[1] - y) <= self.tolerance
+
+    def command_to_point(self, robot, goal):
+        if self.at_point(robot, goal):
+            return self.make_command(0.0, 0.0)
+        x, y = self.position[robot]
+        dx, dy = goal[0] - x, goal[1] - y
+        distance = math.hypot(dx, dy)
+        speed = min(self.max_velocity, distance)
+        return self.make_command(speed * dx / distance, speed * dy / distance)
+
+    def control_homing(self):
+        fresh, reason = self.positions_are_fresh_for(self.ROBOTS)
+        if not fresh:
+            self.stop_all()
+            if reason != self.last_safety_reason:
+                self.get_logger().warn(f'HOMING SAFETY STOP: {reason}')
+                self.last_safety_reason = reason
+            return
+        if self.last_safety_reason is not None:
+            self.get_logger().info('Fresh UWB restored; homing resumed')
+            self.last_safety_reason = None
+
+        if not self.homing_planned:
+            try:
+                self.home_routes = {
+                    robot: self.plan_segment(
+                        self.position[robot], self.home_positions[robot])
+                    for robot in self.ROBOTS
+                }
+            except ValueError as error:
+                self.stop_all()
+                self.state = 'HOMING_BLOCKED'
+                self.get_logger().error(f'HOMING BLOCKED: {error}')
+                return
+            self.homing_planned = True
+            self.get_logger().info('HOMING route ready; moving to standby slots')
+
+        all_home = True
+        for robot in self.ROBOTS:
+            route = self.home_routes[robot]
+            index = self.home_waypoint_index[robot]
+            if index >= len(route):
+                self.stop_robot(robot)
+                continue
+            goal = route[index]
+            if self.at_point(robot, goal):
+                self.home_waypoint_index[robot] += 1
+                self.stop_robot(robot)
+                if self.home_waypoint_index[robot] < len(route):
+                    all_home = False
+                continue
+            all_home = False
+            self.publish_command(robot, self.command_to_point(robot, goal))
+
+        if not all_home:
+            return
+        self.stop_all()
+        self.state = 'STANDBY'
+        self.get_logger().info(
+            'HOMING COMPLETE; state -> STANDBY; waiting on /fleet/mission')
 
     def initialize_follower_offset(self):
         if self.robot_count != 2 or self.follower_offset is not None:
@@ -352,6 +462,9 @@ class MissionManager(Node):
         state = String()
         state.data = self.state
         self.state_pub.publish(state)
+        if self.state == 'HOMING':
+            self.control_homing()
+            return
         if self.state != 'RUNNING':
             return
 
@@ -404,13 +517,9 @@ class MissionManager(Node):
             self.log_waypoint()
             return
 
-        finished_id = self.mission_id
-        self.state = 'STANDBY'
-        self.mission_id = None
-        self.assigned_robots = []
-        self.delivery_request = None
         self.get_logger().info(
-            f'Mission {finished_id} COMPLETED; state -> STANDBY')
+            f'Mission {self.mission_id} COMPLETED; returning to standby slots')
+        self.start_homing('delivery complete')
 
 
 def main(args=None):

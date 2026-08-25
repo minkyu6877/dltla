@@ -3,6 +3,11 @@ control:
   max_velocity: 0.30
   uwb_timeout: 0.50
   control_rate_hz: 20.0
+  # Robot-specific standby slots.  Change only these values when the
+  # physical standby marking moves on the floor.
+  home_positions:
+    robot1: [1.80, 0.40]
+    robot2: [2.20, 0.40]
 
 missions:
   SMALL_A:
@@ -19,4 +24,3 @@ missions:
       - [1.0, 0.0]
       - [3.0, 0.5]
       - [5.0, 2.0]
-
