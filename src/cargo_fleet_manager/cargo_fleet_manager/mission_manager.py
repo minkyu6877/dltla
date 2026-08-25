@@ -498,7 +498,10 @@ class MissionManager(Node):
         if gap <= self.robot2_emergency_gap:
             return self.make_command(0.0, 0.0)
         error = gap - self.robot2_target_gap
-        scale = 1.0 + self.robot2_gap_kp * error
+        # Robot 2 is parked ahead of Robot 1 in the +X travel direction.
+        # When the rear leader closes the gap, Robot 2 must speed up to
+        # restore clearance; the previous sign slowed it down instead.
+        scale = 1.0 - self.robot2_gap_kp * error
         if abs(error) <= self.robot2_gap_tolerance:
             scale = 1.0
         scale = max(0.25, min(1.25, scale))
