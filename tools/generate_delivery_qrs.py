@@ -13,8 +13,8 @@ except ImportError:
 
 
 CARDS = (
-    ("01_SMALL_DELIVERY", "소형 화물 | 우측 상단 도착", "SMALL / 로봇 1대", 3.55, 2.55, "SMALL_BOX", 2.0),
-    ("02_LONG_DELIVERY", "장형 화물 | 우측 상단 도착", "LONG / 로봇 2대", 3.55, 2.55, "LONG_BOX", 8.0),
+    ("01_SMALL_DELIVERY", "SMALL CARGO | TOP-RIGHT DROP", "1 ROBOT", 3.55, 2.55, "SMALL_BOX", 2.0),
+    ("02_LONG_DELIVERY", "LONG CARGO | TOP-RIGHT DROP", "2 ROBOTS", 3.55, 2.55, "LONG_BOX", 8.0),
 )
 
 
@@ -22,6 +22,7 @@ def font(size):
     for candidate in (
         "C:/Windows/Fonts/malgun.ttf",
         "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
     ):
         if Path(candidate).exists():
             return ImageFont.truetype(candidate, size)
@@ -53,7 +54,7 @@ def create_card(card, output_dir):
     draw.text((40, 35), identifier, fill="#174ea6", font=text_font)
     draw.text((40, 80), title, fill="black", font=title_font)
     draw.text((40, 140), subtitle, fill="#555555", font=text_font)
-    draw.text((40, 960), f"목적지 좌표: ({x:.1f}, {y:.1f}) m", fill="black", font=text_font)
+    draw.text((40, 960), f"DESTINATION: ({x:.2f}, {y:.2f}) m", fill="black", font=text_font)
     image.save(output_dir / f"{identifier}.png")
     return encoded
 
