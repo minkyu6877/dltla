@@ -10,8 +10,8 @@ class UwbSimulator(Node):
     # Gazebo controller odometry starts from (0, 0) for each robot.  UWB must
     # instead report the shared warehouse coordinate frame used by missions.
     WORLD_OFFSETS = {
-        'robot1': (1.74, 0.40),
-        'robot2': (2.27, 0.40),
+        'robot1': (0.46, 0.40),
+        'robot2': (0.99, 0.40),
     }
 
     def __init__(self):

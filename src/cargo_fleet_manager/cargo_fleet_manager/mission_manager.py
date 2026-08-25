@@ -27,10 +27,10 @@ class MissionManager(Node):
     # The body plus wheels occupy about 0.35 m across.  Keep an additional
     # margin so the two simulated robots never enter contact distance.
     MIN_ROBOT_SEPARATION = 0.44
-    LOADING_POINT = (0.60, 0.50)
+    LOADING_POINT = (2.80, 0.50)
     DEFAULT_HOME_POSITIONS = {
-        'robot1': (1.70, 0.40),
-        'robot2': (2.30, 0.40),
+        'robot1': (0.46, 0.40),
+        'robot2': (0.99, 0.40),
     }
 
     def __init__(self):
@@ -320,12 +320,10 @@ class MissionManager(Node):
         return command
 
     def make_world_command(self, world_vx, world_vy):
-        """Convert map-frame travel into the fixed IMU standby heading frame."""
-        cosine = math.cos(self.standby_heading)
-        sine = math.sin(self.standby_heading)
-        return self.make_command(
-            cosine * world_vx + sine * world_vy,
-            -sine * world_vx + cosine * world_vy)
+        """Build Gazebo's map/odometry-frame mecanum velocity command."""
+        # The Gazebo reference topic already applies the controller's frame
+        # convention.  A second yaw rotation here reverses navigation.
+        return self.make_command(world_vx, world_vy)
 
     def publish_command(self, robot, command):
         command.header.stamp = self.get_clock().now().to_msg()

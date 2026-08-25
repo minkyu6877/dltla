@@ -7,10 +7,10 @@ control:
   # physical standby marking moves on the floor.
   home_positions:
     # 0.23 m-long bodies leave a 0.30 m front/back ultrasonic gap.
-    robot1: [1.74, 0.40]
-    robot2: [2.27, 0.40]
-  # Both robots wait facing the loading area on the left (-X direction).
-  standby_heading_deg: 180.0
+    robot1: [0.46, 0.40]
+    robot2: [0.99, 0.40]
+  # Both robots wait facing the loading area on the right (+X direction).
+  standby_heading_deg: 0.0
   # Robot 2 has no UWB in the real fleet.  Its IMU/encoders execute the
   # follower velocity and its inward-facing ultrasonic sensor keeps 30 cm.
   robot2_uses_uwb: false
