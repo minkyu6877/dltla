@@ -1,9 +1,7 @@
-import copy
 import heapq
 import json
 import math
 import os
-from collections import deque
 
 import rclpy
 import yaml
@@ -11,7 +9,7 @@ from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import PointStamped, TwistStamped
 from rclpy.node import Node
 from rclpy.signals import SignalHandlerOptions
-from std_msgs.msg import String
+from std_msgs.msg import Float32, String
 
 
 class MissionManager(Node):
@@ -52,14 +50,20 @@ class MissionManager(Node):
             raise ValueError('Control values in missions.yaml must be positive')
         self.home_positions = self.load_home_positions(
             control.get('home_positions'))
+        self.standby_heading = math.radians(
+            float(control.get('standby_heading_deg', 180.0)))
         self.robot2_uses_uwb = bool(control.get('robot2_uses_uwb', False))
-        self.default_follower_delay = float(
-            control.get('robot2_follower_delay', 1.0))
-        self.default_follower_offset = self.load_point(
-            control.get('robot2_formation_offset', (0.60, 0.00)),
-            'robot2_formation_offset')
-        if self.default_follower_delay < 0:
-            raise ValueError('robot2_follower_delay must not be negative')
+        self.robot2_target_gap = float(control.get('robot2_target_gap_m', 0.30))
+        self.robot2_gap_tolerance = float(
+            control.get('robot2_gap_tolerance_m', 0.05))
+        self.robot2_emergency_gap = float(
+            control.get('robot2_emergency_gap_m', 0.20))
+        self.robot2_gap_timeout = float(control.get('robot2_gap_timeout', 0.30))
+        self.robot2_gap_kp = float(control.get('robot2_gap_kp', 0.80))
+        if min(self.robot2_target_gap, self.robot2_gap_tolerance,
+               self.robot2_emergency_gap, self.robot2_gap_timeout) <= 0 or \
+                self.robot2_emergency_gap >= self.robot2_target_gap:
+            raise ValueError('Robot 2 ultrasonic gap settings are invalid')
 
         self.position = {robot: None for robot in self.ROBOTS}
         self.position_time = {robot: None for robot in self.ROBOTS}
@@ -72,6 +76,11 @@ class MissionManager(Node):
                 PointStamped, f'/{robot}/uwb_position',
                 lambda msg, r=robot: self.uwb_callback(msg, r), 10)
 
+        self.robot2_gap = None
+        self.robot2_gap_time = None
+        self.create_subscription(
+            Float32, '/robot2/ultrasonic_gap', self.ultrasonic_callback, 10)
+
         self.create_subscription(
             String, '/fleet/mission', self.mission_callback, 10)
         self.state_pub = self.create_publisher(String, '/fleet/state', 10)
@@ -82,10 +91,6 @@ class MissionManager(Node):
         self.robot_count = 0
         self.assigned_robots = []
         self.waypoint_index = 0
-        self.follower_delay = 0.0
-        self.follower_offset = None
-        self.command_history = deque()
-        self.follower_command = self.make_command(0.0, 0.0)
         self.last_safety_reason = None
         self.last_proximity_reason = None
         self.delivery_request = None
@@ -93,8 +98,6 @@ class MissionManager(Node):
         self.home_waypoint_index = {}
         self.homing_planned = False
         self.homing_robots = ()
-        self.follower_settle_until_ns = None
-        self.follower_settle_final = False
 
         self.timer = self.create_timer(1.0 / rate, self.control_loop)
         self.get_logger().info(
@@ -159,6 +162,10 @@ class MissionManager(Node):
         self.position[robot] = (float(msg.point.x), float(msg.point.y))
         self.position_time[robot] = self.get_clock().now()
 
+    def ultrasonic_callback(self, msg):
+        self.robot2_gap = float(msg.data)
+        self.robot2_gap_time = self.get_clock().now()
+
     def mission_callback(self, msg):
         raw_command = msg.data.strip()
         try:
@@ -187,18 +194,14 @@ class MissionManager(Node):
         self.route = list(mission['route'])
         self.robot_count = mission['robots']
         self.assigned_robots = list(self.ROBOTS[:self.robot_count])
-        self.follower_delay = mission['follower_delay']
         self.waypoint_index = 0
-        self.follower_offset = None
-        self.command_history.clear()
-        self.follower_command = self.make_command(0.0, 0.0)
         self.last_safety_reason = None
         self.last_proximity_reason = None
         self.state = 'RUNNING'
         self.stop_all()
         self.get_logger().info(
             f'Mission {mission_id} STARTED: robots={self.robot_count}, '
-            f'waypoints={len(self.route)}, delay={self.follower_delay:.2f}s')
+            f'waypoints={len(self.route)}')
         self.log_waypoint()
 
     def start_delivery(self, request):
@@ -232,12 +235,6 @@ class MissionManager(Node):
         self.route = []
         self.delivery_request = {'destination': destination}
         self.waypoint_index = 0
-        self.follower_offset = None
-        default_delay = (
-            self.default_follower_delay if self.robot_count == 2 else 0.0)
-        self.follower_delay = float(request.get('follower_delay', default_delay))
-        self.command_history.clear()
-        self.follower_command = self.make_command(0.0, 0.0)
         self.last_safety_reason = None
         self.last_proximity_reason = None
         self.state = 'RUNNING'
@@ -322,6 +319,14 @@ class MissionManager(Node):
         command.twist.linear.y = float(vy)
         return command
 
+    def make_world_command(self, world_vx, world_vy):
+        """Convert map-frame travel into the fixed IMU standby heading frame."""
+        cosine = math.cos(self.standby_heading)
+        sine = math.sin(self.standby_heading)
+        return self.make_command(
+            cosine * world_vx + sine * world_vy,
+            -sine * world_vx + cosine * world_vy)
+
     def publish_command(self, robot, command):
         command.header.stamp = self.get_clock().now().to_msg()
         self.cmd_pub[robot].publish(command)
@@ -382,9 +387,6 @@ class MissionManager(Node):
         self.robot_count = 0
         self.assigned_robots = []
         self.waypoint_index = 0
-        self.follower_offset = None
-        self.command_history.clear()
-        self.follower_command = self.make_command(0.0, 0.0)
         self.last_safety_reason = None
         self.last_proximity_reason = None
         self.delivery_request = None
@@ -393,8 +395,6 @@ class MissionManager(Node):
         self.homing_planned = False
         self.homing_robots = tuple(
             robot for robot in self.ROBOTS if self.has_position_feedback(robot))
-        self.follower_settle_until_ns = None
-        self.follower_settle_final = False
         self.stop_all()
         self.get_logger().info(
             f'HOMING STARTED ({reason}); waiting for UWB before moving to '
@@ -415,7 +415,7 @@ class MissionManager(Node):
         dx, dy = goal[0] - x, goal[1] - y
         distance = math.hypot(dx, dy)
         speed = min(self.max_velocity, distance)
-        return self.make_command(speed * dx / distance, speed * dy / distance)
+        return self.make_world_command(speed * dx / distance, speed * dy / distance)
 
     def control_homing(self):
         fresh, reason = self.positions_are_fresh_for(self.homing_robots)
@@ -470,33 +470,8 @@ class MissionManager(Node):
         self.get_logger().info(
             'HOMING COMPLETE; state -> STANDBY; waiting on /fleet/mission')
 
-    def initialize_follower_offset(self):
-        if self.robot_count != 2 or self.follower_offset is not None:
-            return
-        if not self.robot2_uses_uwb:
-            self.follower_offset = self.default_follower_offset
-            self.get_logger().info(
-                'Robot 2 uses delayed command following without UWB: '
-                f'configured offset=({self.follower_offset[0]:.2f}, '
-                f'{self.follower_offset[1]:.2f}), '
-                f'delay={self.follower_delay:.2f}s')
-            return
-        leader_x, leader_y = self.position['robot1']
-        follower_x, follower_y = self.position['robot2']
-        self.follower_offset = (
-            follower_x - leader_x,
-            follower_y - leader_y,
-        )
-        self.get_logger().info(
-            'Robot 2 formation offset captured: '
-            f'({self.follower_offset[0]:.2f}, {self.follower_offset[1]:.2f})')
-
     def goal_for(self, robot):
-        x, y = self.route[self.waypoint_index]
-        if robot == 'robot2' and self.follower_offset is not None:
-            x += self.follower_offset[0]
-            y += self.follower_offset[1]
-        return x, y
+        return self.route[self.waypoint_index]
 
     def at_goal(self, robot):
         goal_x, goal_y = self.goal_for(robot)
@@ -509,40 +484,29 @@ class MissionManager(Node):
             for robot in self.assigned_robots
             if self.has_position_feedback(robot))
 
-    def start_follower_settling(self, final_waypoint):
-        """Hold the leader at each corner until the delayed follower catches up."""
-        self.state = 'FOLLOWER_SETTLING'
-        self.follower_settle_final = final_waypoint
-        self.follower_settle_until_ns = (
-            self.get_clock().now().nanoseconds +
-            int(self.follower_delay * 1e9))
-        self.stop_robot('robot1')
-        self.get_logger().info(
-            f'Robot 1 reached waypoint; holding {self.follower_delay:.2f}s '
-            'for robot 2 delayed follower')
+    def ultrasonic_gap_is_fresh(self):
+        if self.robot2_gap is None or self.robot2_gap_time is None:
+            return False, 'waiting for robot2 ultrasonic gap'
+        age = (self.get_clock().now() - self.robot2_gap_time).nanoseconds / 1e9
+        if age > self.robot2_gap_timeout:
+            return False, f'robot2 ultrasonic gap stale ({age:.2f}s)'
+        if self.robot2_gap < 0.0:
+            return False, 'robot2 ultrasonic gap is invalid'
+        return True, None
 
-    def control_follower_settling(self):
-        fresh, reason = self.positions_are_fresh_for(('robot1',))
-        if not fresh:
-            self.stop_all()
-            if reason != self.last_safety_reason:
-                self.get_logger().warn(f'SAFETY STOP: {reason}')
-                self.last_safety_reason = reason
-            return
-        self.stop_robot('robot1')
-        self.publish_command(
-            'robot2', self.delayed_follower_command(self.make_command(0.0, 0.0)))
-        if self.get_clock().now().nanoseconds < self.follower_settle_until_ns:
-            return
-        if not self.follower_settle_final:
-            self.waypoint_index += 1
-            self.state = 'RUNNING'
-            self.log_waypoint()
-            return
-        self.stop_all()
-        self.get_logger().info(
-            f'Mission {self.mission_id} COMPLETED; returning to standby slots')
-        self.start_homing('delivery complete')
+    def ultrasonic_follower_command(self, leader_command):
+        """Gap-controlled request for Robot 2's IMU/encoder drive controller."""
+        gap = self.robot2_gap
+        if gap <= self.robot2_emergency_gap:
+            return self.make_command(0.0, 0.0)
+        error = gap - self.robot2_target_gap
+        scale = 1.0 + self.robot2_gap_kp * error
+        if abs(error) <= self.robot2_gap_tolerance:
+            scale = 1.0
+        scale = max(0.25, min(1.25, scale))
+        return self.make_command(
+            leader_command.twist.linear.x * scale,
+            leader_command.twist.linear.y * scale)
 
     def leader_command(self):
         if self.at_goal('robot1'):
@@ -552,15 +516,7 @@ class MissionManager(Node):
         dx, dy = goal_x - x, goal_y - y
         distance = math.hypot(dx, dy)
         speed = min(self.max_velocity, distance)
-        return self.make_command(speed * dx / distance, speed * dy / distance)
-
-    def delayed_follower_command(self, leader_command):
-        now_ns = self.get_clock().now().nanoseconds
-        self.command_history.append((now_ns, copy.deepcopy(leader_command)))
-        cutoff = now_ns - int(self.follower_delay * 1e9)
-        while self.command_history and self.command_history[0][0] <= cutoff:
-            _, self.follower_command = self.command_history.popleft()
-        return copy.deepcopy(self.follower_command)
+        return self.make_world_command(speed * dx / distance, speed * dy / distance)
 
     def log_waypoint(self):
         x, y = self.route[self.waypoint_index]
@@ -575,28 +531,39 @@ class MissionManager(Node):
         if self.state == 'HOMING':
             self.control_homing()
             return
-        if self.state == 'FOLLOWER_SETTLING':
-            self.control_follower_settling()
-            return
         if self.state != 'RUNNING':
             return
 
         fresh, reason = self.positions_are_fresh()
         if not fresh:
             self.stop_all()
-            self.command_history.clear()
-            self.follower_command = self.make_command(0.0, 0.0)
             if reason != self.last_safety_reason:
                 self.get_logger().warn(f'SAFETY STOP: {reason}')
                 self.last_safety_reason = reason
             return
+        if self.robot_count == 2:
+            gap_fresh, gap_reason = self.ultrasonic_gap_is_fresh()
+            if not gap_fresh:
+                self.stop_all()
+                if gap_reason != self.last_safety_reason:
+                    self.get_logger().warn(f'SAFETY STOP: {gap_reason}')
+                    self.last_safety_reason = gap_reason
+                return
+            if self.robot2_gap <= self.robot2_emergency_gap:
+                self.stop_all()
+                reason = (
+                    f'ROBOT 2 ULTRASONIC STOP: gap={self.robot2_gap:.2f} m '
+                    f'(minimum={self.robot2_emergency_gap:.2f} m)')
+                if reason != self.last_safety_reason:
+                    self.get_logger().warn(reason)
+                    self.last_safety_reason = reason
+                return
         if self.last_safety_reason is not None:
             self.get_logger().info('Fresh UWB restored; mission resumed')
             self.last_safety_reason = None
         if self.robots_too_close():
             return
 
-        self.initialize_follower_offset()
         if self.delivery_request is not None and not self.route:
             try:
                 self.route = self.build_delivery_route()
@@ -612,10 +579,10 @@ class MissionManager(Node):
         leader = self.leader_command()
         self.publish_command('robot1', leader)
         if self.robot_count == 2:
-            # Real deployment boundary: replace this ROS publisher with the
-            # future Raspberry Pi -> Robot 2 ESP32 transport adapter.
+            # Robot 2 firmware uses IMU/encoder feedback to execute this
+            # request; the ultrasonic gap only adjusts its pace.
             self.publish_command(
-                'robot2', self.delayed_follower_command(leader))
+                'robot2', self.ultrasonic_follower_command(leader))
         else:
             self.stop_robot('robot2')
 
@@ -624,18 +591,9 @@ class MissionManager(Node):
             return
         self.get_logger().info(
             f'{self.mission_id}: waypoint {self.waypoint_index + 1} reached')
-        if self.robot_count == 2 and not self.robot2_uses_uwb:
-            # Do not let the leader turn back toward a follower that is still
-            # on the previous straight.  The timed hold preserves a safe gap
-            # without requiring robot 2 position feedback.
-            self.start_follower_settling(
-                self.waypoint_index + 1 == len(self.route))
-            return
         self.stop_all()
-        self.command_history.clear()
         self.waypoint_index += 1
         if self.waypoint_index < len(self.route):
-            self.follower_command = self.make_command(0.0, 0.0)
             self.log_waypoint()
             return
 

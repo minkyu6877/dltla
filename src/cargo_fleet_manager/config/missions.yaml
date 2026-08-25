@@ -6,13 +6,19 @@ control:
   # Robot-specific standby slots.  Change only these values when the
   # physical standby marking moves on the floor.
   home_positions:
-    robot1: [1.70, 0.40]
-    robot2: [2.30, 0.40]
-  # Robot 2 has no UWB in the real fleet.  It follows delayed velocity
-  # commands from robot 1 and is manually placed in its standby slot.
+    # 0.23 m-long bodies leave a 0.30 m front/back ultrasonic gap.
+    robot1: [1.74, 0.40]
+    robot2: [2.27, 0.40]
+  # Both robots wait facing the loading area on the left (-X direction).
+  standby_heading_deg: 180.0
+  # Robot 2 has no UWB in the real fleet.  Its IMU/encoders execute the
+  # follower velocity and its inward-facing ultrasonic sensor keeps 30 cm.
   robot2_uses_uwb: false
-  robot2_follower_delay: 1.0
-  robot2_formation_offset: [0.60, 0.00]
+  robot2_target_gap_m: 0.30
+  robot2_gap_tolerance_m: 0.05
+  robot2_emergency_gap_m: 0.20
+  robot2_gap_timeout: 0.30
+  robot2_gap_kp: 0.80
 
 missions:
   SMALL_A:
