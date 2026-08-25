@@ -210,6 +210,10 @@ class MissionManager(Node):
 
     def plan_segment(self, start, goal):
         """A* route through the warehouse grid, reduced to corner waypoints."""
+        if not self.OBSTACLES:
+            # The obstacle-free test layout should demonstrate direct travel
+            # between the coloured zones rather than an artificial grid turn.
+            return [goal]
         step = self.GRID_SIZE
         to_cell = lambda point: (round(point[0] / step), round(point[1] / step))
         to_point = lambda cell: (cell[0] * step, cell[1] * step)
