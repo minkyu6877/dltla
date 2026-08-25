@@ -84,6 +84,8 @@ class MissionManager(Node):
         self.create_subscription(
             String, '/fleet/mission', self.mission_callback, 10)
         self.state_pub = self.create_publisher(String, '/fleet/state', 10)
+        self.target_pub = self.create_publisher(
+            PointStamped, '/fleet/current_target', 10)
 
         self.state = 'HOMING'
         self.mission_id = None
@@ -520,6 +522,12 @@ class MissionManager(Node):
 
     def log_waypoint(self):
         x, y = self.route[self.waypoint_index]
+        target = PointStamped()
+        target.header.stamp = self.get_clock().now().to_msg()
+        target.header.frame_id = 'world'
+        target.point.x = x
+        target.point.y = y
+        self.target_pub.publish(target)
         self.get_logger().info(
             f'{self.mission_id}: waypoint {self.waypoint_index + 1}/'
             f'{len(self.route)} -> ({x:.2f}, {y:.2f})')

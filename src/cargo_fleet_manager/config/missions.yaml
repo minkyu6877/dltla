@@ -1,5 +1,5 @@
 control:
-  tolerance: 0.08
+  tolerance: 0.02
   # 0.2 m/s = 0.72 km/h.  Use this as the visual and real mission limit.
   max_velocity: 0.20
   uwb_timeout: 0.50
@@ -29,8 +29,9 @@ missions:
       - [2.20, 0.50]  # loading zone
       - [3.45, 0.50]  # lower-right corner
       - [3.45, 2.55]  # upper-right corner
-      - [0.99, 2.55]  # upper-left corner
-      - [0.99, 0.40]  # leader standby slot
+      - [0.46, 2.55]  # upper-left corner
+      - [0.46, 0.40]  # lower-left corner
+      - [0.99, 0.40]  # leader standby; follower finishes at x=0.46
 
   SMALL_A:
     robots: 1
