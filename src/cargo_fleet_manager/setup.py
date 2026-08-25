@@ -32,6 +32,7 @@ setup(
             'mission_manager = cargo_fleet_manager.mission_manager:main',
             'qr_reader = cargo_fleet_manager.qr_reader:main',
             'uwb_simulator = cargo_fleet_manager.uwb_simulator:main',
+            'kinematic_visualizer = cargo_fleet_manager.kinematic_visualizer:main',
             'coordinate_console = cargo_fleet_manager.coordinate_console:main',
         ],
     },

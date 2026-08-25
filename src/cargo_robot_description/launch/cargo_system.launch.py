@@ -66,6 +66,15 @@ def generate_launch_description():
         output='screen'
     )
 
+    pose_bridge = Node(
+        package='ros_gz_bridge',
+        executable='parameter_bridge',
+        arguments=[
+            '/world/warehouse_l_shape/set_pose@ros_gz_interfaces/srv/SetEntityPose@gz.msgs.Pose'
+        ],
+        output='screen'
+    )
+
     # 3. Robot State Publisher
     robot1_rsp = Node(
         package='robot_state_publisher',
@@ -250,11 +259,24 @@ def generate_launch_description():
 
         TimerAction(
             period=21.0,
+            actions=[
+                pose_bridge,
+                Node(
+                    package='cargo_fleet_manager',
+                    executable='kinematic_visualizer',
+                    output='screen',
+                    parameters=[{'use_sim_time': True}],
+                )
+            ]
+        ),
+
+        TimerAction(
+            period=22.0,
             actions=[mission_manager]
         ),
 
         TimerAction(
-            period=23.0,
+            period=24.0,
             actions=[qr_reader]
         ),
     ])

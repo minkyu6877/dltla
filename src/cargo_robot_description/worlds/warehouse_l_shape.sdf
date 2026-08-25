@@ -3,7 +3,7 @@
   <world name="warehouse_l_shape">
     <gravity>0 0 -9.8</gravity>
     <physics name="1ms" type="gz-physics-dartsim">
-      <max_step_size>0.001</max_step_size>
+      <max_step_size>0.005</max_step_size>
       <real_time_factor>1.0</real_time_factor>
     </physics>
     <plugin filename="gz-sim-physics-system" name="gz::sim::systems::Physics"/>
