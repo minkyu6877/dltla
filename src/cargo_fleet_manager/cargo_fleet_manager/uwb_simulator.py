@@ -6,6 +6,12 @@ from geometry_msgs.msg import PointStamped
 
 
 class UwbSimulator(Node):
+    # Gazebo controller odometry starts from (0, 0) for each robot.  UWB must
+    # instead report the shared warehouse coordinate frame used by missions.
+    WORLD_OFFSETS = {
+        'robot1': (1.75, 0.30),
+        'robot2': (2.25, 0.30),
+    }
 
     def __init__(self):
         super().__init__('uwb_simulator')
@@ -47,8 +53,9 @@ class UwbSimulator(Node):
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = 'world'
 
-        msg.point.x = odom.pose.pose.position.x
-        msg.point.y = odom.pose.pose.position.y
+        offset_x, offset_y = self.WORLD_OFFSETS[robot_name]
+        msg.point.x = offset_x + odom.pose.pose.position.x
+        msg.point.y = offset_y + odom.pose.pose.position.y
         msg.point.z = 0.0
 
         pub.publish(msg)
