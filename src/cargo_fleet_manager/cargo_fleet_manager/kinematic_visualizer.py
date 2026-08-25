@@ -28,6 +28,7 @@ class KinematicVisualizer(Node):
         self.positions = {
             robot: list(position) for robot, position in self.HOME_POSITIONS.items()
         }
+        self.headings = {robot: 0.0 for robot in self.ROBOTS}
         self.commands = {robot: TwistStamped() for robot in self.ROBOTS}
         self.pending = {robot: None for robot in self.ROBOTS}
         self.pose_clients = {
@@ -68,6 +69,8 @@ class KinematicVisualizer(Node):
                 self.MAP_X[0], position[0] + command.x * dt))
             position[1] = min(self.MAP_Y[1], max(
                 self.MAP_Y[0], position[1] + command.y * dt))
+            if math.hypot(command.x, command.y) > 0.001:
+                self.headings[robot] = math.atan2(command.y, command.x)
             self.publish_position(robot, now)
             self.update_model_pose(robot)
         self.publish_gap()
@@ -97,7 +100,8 @@ class KinematicVisualizer(Node):
         request.entity.type = Entity.MODEL
         request.pose.position.x, request.pose.position.y = self.positions[robot]
         request.pose.position.z = 0.0
-        request.pose.orientation.w = 1.0
+        request.pose.orientation.z = math.sin(self.headings[robot] / 2.0)
+        request.pose.orientation.w = math.cos(self.headings[robot] / 2.0)
         self.pending[robot] = client.call_async(request)
 
 
