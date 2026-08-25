@@ -4,7 +4,9 @@ import shutil
 import tempfile
 
 from launch import LaunchDescription
-from launch.actions import ExecuteProcess, TimerAction
+from launch.actions import DeclareLaunchArgument, ExecuteProcess, TimerAction
+from launch.conditions import IfCondition
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
 
@@ -186,10 +188,16 @@ def generate_launch_description():
     qr_reader = Node(
         package='cargo_fleet_manager',
         executable='qr_reader',
+        condition=IfCondition(LaunchConfiguration('start_qr_reader')),
         output='screen'
     )
 
     return LaunchDescription([
+
+        DeclareLaunchArgument(
+            'start_qr_reader',
+            default_value='false',
+            description='Start the physical QR camera reader.'),
 
         gazebo,
 
