@@ -29,8 +29,8 @@ class MissionManager(Node):
     MIN_ROBOT_SEPARATION = 0.44
     LOADING_POINT = (2.20, 0.50)
     DEFAULT_HOME_POSITIONS = {
-        'robot1': (0.46, 0.40),
-        'robot2': (0.99, 0.40),
+        'robot1': (0.99, 0.40),
+        'robot2': (0.46, 0.40),
     }
 
     def __init__(self):
@@ -498,10 +498,9 @@ class MissionManager(Node):
         if gap <= self.robot2_emergency_gap:
             return self.make_command(0.0, 0.0)
         error = gap - self.robot2_target_gap
-        # Robot 2 is parked ahead of Robot 1 in the +X travel direction.
-        # When the rear leader closes the gap, Robot 2 must speed up to
-        # restore clearance; the previous sign slowed it down instead.
-        scale = 1.0 - self.robot2_gap_kp * error
+        # Robot 2 follows behind Robot 1 in the +X travel direction.  When
+        # the gap becomes too small it slows; when it opens it catches up.
+        scale = 1.0 + self.robot2_gap_kp * error
         if abs(error) <= self.robot2_gap_tolerance:
             scale = 1.0
         scale = max(0.25, min(1.25, scale))
