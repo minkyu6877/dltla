@@ -1,6 +1,6 @@
 # UWB 기반 다중 모빌리티 협력 운송 로봇
 
-Raspberry Pi 한 대가 QR을 인식하고 Wi-Fi/UDP로 두 대의 ESP32 메카넘 로봇을 제어하는 프로젝트입니다. 현재 저장소에는 실제 구동에 사용하는 코드만 정리했습니다. UWB 위치 제어는 하드웨어 검증 후 이 구조에 추가할 예정입니다.
+Raspberry Pi 한 대가 QR을 인식하고 Wi-Fi/UDP로 두 대의 ESP32 메카넘 로봇을 제어하는 프로젝트입니다. 현재 저장소에는 실제 구동에 사용하는 코드와 UWB 캘리브레이션 도구를 정리했습니다. UWB 위치 제어는 하드웨어 검증 후 이 구조에 추가할 예정입니다.
 
 최근 RPM 보정 결과와 다음 실험 항목은 [CALIBRATION_STATUS.md](CALIBRATION_STATUS.md)에 기록합니다.
 
@@ -16,6 +16,7 @@ Raspberry Pi 한 대가 QR을 인식하고 Wi-Fi/UDP로 두 대의 ESP32 메카�
 - 로봇 2: MPU6050 자세·가속도·자이로 상태 전송
 - RPM·1 m 직진·공전 실험과 CSV 기록
 - 1초 이상 명령이 끊기면 ESP32가 자동 정지
+- DW1000 앵커 4개의 안테나 지연값 자동 캘리브레이션 및 JSON 저장
 
 ## 파일 구성
 
@@ -30,6 +31,12 @@ raspberry_pi/
   manual_drive.py                 터미널 수동 조종
   robot_status_monitor.py         로그가 흐르지 않는 상태 모니터
   robot_experiment_gui.py         주행 보정 실험 GUI/CSV 기록
+uwb_calibration/
+  reference_tag/                  기준 태그 ESP32 코드
+  anchor_autocalibrate/           앵커 공용 자동 보정 ESP32 코드
+  README.md                       설치·배치·실험 절차
+tools/
+  uwb_calibration_wizard.py       PC/라즈베리파이 자동 보정 도우미
 ```
 
 이전 테스트 코드, 중복 펌웨어, 측정 CSV, 보고서와 외부 UWB 예제 전체는 저장소에서 제외했습니다.
@@ -131,3 +138,7 @@ python3 robot_experiment_gui.py
 처음에는 바퀴를 바닥에서 띄우고 전진·후진·정지와 네 바퀴 RPM 부호를 확인하세요. 모터 전원은 ESP32에서 공급하지 마세요. 시험 중에는 즉시 전원을 차단할 사람이 로봇 옆에 있어야 합니다.
 
 로봇 2는 저속 시험에서 FL/RR 바퀴가 상대적으로 느린 경향이 확인되어 현재 펌웨어에 보수적인 정마찰 피드포워드(`FL=0.0045`, `RR=0.0055`)가 적용되어 있습니다. 방향 반전값은 바꾸지 말고 펌웨어를 다시 올린 뒤 `robot_experiment_gui.py`로 RPM 시험을 반복해 보정 효과를 확인해야 합니다.
+
+## UWB 캘리브레이션
+
+4개 앵커를 같은 기준 태그로 한 개씩 자동 보정하는 방법은 [uwb_calibration/README.md](uwb_calibration/README.md)를 따릅니다. 자동 군집 주행 전에 안테나 지연값 보정과 4 m x 3 m 시험장 좌표 검증을 먼저 끝내야 합니다.

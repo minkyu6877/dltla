@@ -11,6 +11,8 @@ experiment_results/
 __pycache__/
 *.py[cod]
 .venv/
+.compile/
+uwb_calibration_results.json
 
 # ROS 2 generated output and local snapshots
 build/
