@@ -28,7 +28,7 @@ class MissionManager(Node):
     ROBOT_CLEARANCE = 0.28
     # The body plus wheels occupy about 0.35 m across.  Keep an additional
     # margin so the two simulated robots never enter contact distance.
-    MIN_ROBOT_SEPARATION = 0.48
+    MIN_ROBOT_SEPARATION = 0.44
     LOADING_POINT = (0.60, 0.50)
     DEFAULT_HOME_POSITIONS = {
         'robot1': (1.70, 0.40),
