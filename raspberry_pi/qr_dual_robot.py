@@ -12,7 +12,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-import cv2
+try:
+    import cv2
+except ModuleNotFoundError:  # Allows non-camera config/unit checks.
+    cv2 = None
 
 
 @dataclass(frozen=True)
@@ -84,6 +87,10 @@ class CameraSource:
     """Use Picamera2 for a CSI camera, or OpenCV for a USB camera."""
 
     def __init__(self, config: dict):
+        if cv2 is None:
+            raise RuntimeError(
+                "OpenCV is not installed; run sudo apt install python3-opencv"
+            )
         self._picamera = None
         self._capture = None
         backend = str(config.get("camera_backend", "auto")).lower()
@@ -155,6 +162,11 @@ class RobotFleet:
         for address in self.addresses[:robot_count]:
             self.socket.sendto(payload, address)
 
+    def send_to(self, robot_index: int, message: str) -> None:
+        if robot_index not in (0, 1):
+            raise ValueError(f"robot_index must be 0 or 1, got {robot_index}")
+        self.socket.sendto(message.encode("utf-8"), self.addresses[robot_index])
+
     def receive_status(self) -> None:
         while True:
             try:
@@ -187,6 +199,15 @@ class RobotFleet:
                 key, value = part.split("=", 1)
                 fields[key.strip()] = value.strip()
         return fields
+
+    def status_snapshot(
+        self, robot_index: int, now: float, timeout: float = 1.5
+    ) -> tuple[float, dict[str, str]] | None:
+        ip = self.addresses[robot_index][0]
+        status = self.last_status.get(ip)
+        if status is None or now - status[0] > timeout:
+            return None
+        return status[0], self.status_fields(robot_index, now, timeout)
 
     def safety_alert(self, robot_count: int, now: float) -> str | None:
         for index in range(robot_count):

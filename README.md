@@ -1,6 +1,6 @@
-# UWB 기반 다중 모빌리티 협력 운송 로봇
+# 엔코더·IMU 기반 다중 모빌리티 협력 운송 로봇
 
-Raspberry Pi 한 대가 QR을 인식하고 Wi-Fi/UDP로 두 대의 ESP32 메카넘 로봇을 제어하는 프로젝트입니다. 현재 저장소에는 실제 구동에 사용하는 코드만 정리했습니다. UWB 위치 제어는 하드웨어 검증 후 이 구조에 추가할 예정입니다.
+Raspberry Pi 한 대가 QR을 인식하고 Wi-Fi/UDP로 두 대의 ESP32 메카넘 로봇을 제어하는 프로젝트입니다. UWB 고장 시에는 엔코더 이동거리와 로봇 2의 MPU6050 방향을 결합해 짧은 임무 동안 지도 좌표를 추정합니다.
 
 최근 RPM 보정 결과와 다음 실험 항목은 [CALIBRATION_STATUS.md](CALIBRATION_STATUS.md)에 기록합니다.
 
@@ -16,6 +16,7 @@ Raspberry Pi 한 대가 QR을 인식하고 Wi-Fi/UDP로 두 대의 ESP32 메카�
 - 로봇 2: MPU6050 자세·가속도·자이로 상태 전송
 - RPM·1 m 직진·공전 실험과 CSV 기록
 - 1초 이상 명령이 끊기면 ESP32가 자동 정지
+- UWB 없이 시뮬레이션 좌표 경로를 재현하는 QR 주행
 
 ## 파일 구성
 
@@ -26,6 +27,8 @@ firmware/
 raspberry_pi/
   config.example.json             IP·속도·경로 설정 예시
   qr_dual_robot.py                QR 자동 주행
+  qr_coordinate_navigation.py     엔코더+IMU 좌표 기반 2대 QR 주행
+  odometry_navigation.py          메카넘 오도메트리·좌표 제어 핵심
   robot_control_gui.py            브라우저 수동 조종/상태 GUI
   manual_drive.py                 터미널 수동 조종
   robot_status_monitor.py         로그가 흐르지 않는 상태 모니터
@@ -99,6 +102,9 @@ python3 robot_control_gui.py
 # QR 자동 주행(SSH 환경에서는 --headless 권장)
 python3 qr_dual_robot.py --headless
 
+# UWB 없이 시뮬레이션 경로를 그대로 실행
+python3 qr_coordinate_navigation.py --headless
+
 # 터미널 수동 조종
 python3 manual_drive.py
 
@@ -125,6 +131,24 @@ python3 robot_experiment_gui.py
 - `vy`: 좌측 횡이동 `+`, 우측 횡이동 `-`
 - `w`: 반시계 회전 `+`, 시계 회전 `-`
 - `duration_sec`: 해당 명령을 유지할 시간
+
+## 5. UWB 없는 좌표 주행
+
+`qr_coordinate_navigation.py`는 QR의 `dest_x=3.55`, `dest_y=2.55`를 확인한 뒤 두 로봇으로 시뮬레이션의 코너 경로를 실행합니다. 이 모드에서는 QR을 비추기 전에 로봇을 반드시 아래 바닥 표시에 놓아야 합니다.
+
+- 지도 원점: 4×3 m 작업장의 왼쪽 아래
+- 로봇 1 중심: `(0.99, 0.75) m`
+- 로봇 2 중심: `(0.46, 0.75) m`
+- 두 로봇의 정면: 오른쪽 `+X`, `0°`
+- 로봇 몸체 사이 간격: `0.30 m`
+
+실행 전 설정만 검사할 수 있습니다.
+
+```bash
+python3 qr_coordinate_navigation.py --config config.json --check-config
+```
+
+이 방식의 좌표는 절대좌표가 아니라 엔코더 적분값입니다. 바퀴 미끄러짐과 MPU6050 yaw drift가 누적되므로 매 임무 시작 때 위 위치로 다시 맞춰야 하며, 장시간 반복 운행에는 AprilTag·카메라·LiDAR 같은 외부 절대 위치 보정 수단을 추가해야 합니다.
 
 ## 안전 확인
 

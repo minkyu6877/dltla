@@ -37,6 +37,41 @@
   "camera_index": 0,
   "frame_width": 1280,
   "frame_height": 720,
+  "coordinate_navigation": {
+    "home_positions": {
+      "robot1": [0.99, 0.75, 0.0],
+      "robot2": [0.46, 0.75, 0.0]
+    },
+    "wheel_radius_m": 0.03,
+    "wheelbase_m": 0.194,
+    "track_m": 0.30,
+    "command_linear_scale_mps": 0.942,
+    "max_speed_mps": 0.20,
+    "min_speed_mps": 0.04,
+    "position_tolerance_m": 0.05,
+    "heading_tolerance_deg": 4.0,
+    "position_kp": 0.8,
+    "heading_kp": 1.6,
+    "max_yaw_rate_deg_s": 45.0,
+    "target_gap_cm": 30.0,
+    "gap_command_kp": 0.012,
+    "max_gap_correction": 0.08,
+    "center_offset_cm": 23.0,
+    "min_valid_gap_cm": 10.0,
+    "max_valid_gap_cm": 150.0,
+    "destination_waypoint": "GREEN_DESTINATION",
+    "qr_destination_tolerance_m": 0.10,
+    "route": [
+      {"name": "LOADING", "x": 2.20, "y": 0.75},
+      {"name": "LOWER_RIGHT", "x": 3.25, "y": 0.75},
+      {"name": "UPPER_RIGHT", "x": 3.25, "y": 2.20},
+      {"name": "GREEN_DESTINATION", "x": 3.55, "y": 2.55, "dwell_sec": 2.0},
+      {"name": "SAFE_REVERSE", "x": 3.25, "y": 2.20, "reverse": true},
+      {"name": "UPPER_LEFT", "x": 0.75, "y": 2.20},
+      {"name": "LOWER_LEFT", "x": 0.75, "y": 0.75},
+      {"name": "STANDBY", "x": 0.99, "y": 0.75}
+    ]
+  },
   "cargo_robot_counts": {
     "SMALL_BOX": 1,
     "LONG_BOX": 2,
