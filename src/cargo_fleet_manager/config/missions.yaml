@@ -1,10 +1,40 @@
 control:
-  tolerance: 0.08
-  max_velocity: 0.30
+  tolerance: 0.02
+  # 0.2 m/s = 0.72 km/h.  Use this as the visual and real mission limit.
+  max_velocity: 0.20
   uwb_timeout: 0.50
   control_rate_hz: 20.0
+  # Robot-specific standby slots.  Change only these values when the
+  # physical standby marking moves on the floor.
+  home_positions:
+    # 0.23 m-long bodies leave a 0.30 m front/back ultrasonic gap.
+    robot1: [0.99, 0.75]
+    robot2: [0.46, 0.75]
+  # Both robots wait facing the loading area on the right (+X direction).
+  standby_heading_deg: 0.0
+  # Robot 2 has no UWB in the real fleet.  Its IMU/encoders execute the
+  # follower velocity and its inward-facing ultrasonic sensor keeps 30 cm.
+  robot2_uses_uwb: false
+  robot2_target_gap_m: 0.30
+  robot2_gap_tolerance_m: 0.05
+  robot2_emergency_gap_m: 0.20
+  robot2_gap_timeout: 0.30
+  robot2_gap_kp: 0.80
 
 missions:
+  # Visual cornering proof: a large rectangular route with only 90-degree turns.
+  CORNER_DEMO:
+    robots: 2
+    route:
+      - [2.20, 0.75]  # loading zone
+      - [3.25, 0.75]  # lower-right pivot center
+      - [3.25, 2.20]  # upper-right pivot center
+      - [3.55, 2.55]  # green destination; stop here for unloading
+      - [3.25, 2.20]  # reverse to the safe pivot center
+      - [0.75, 2.20]  # upper-left pivot center
+      - [0.75, 0.75]  # lower-left pivot center
+      - [0.99, 0.75]  # leader standby; follower finishes at x=0.46
+
   SMALL_A:
     robots: 1
     route:
@@ -19,4 +49,3 @@ missions:
       - [1.0, 0.0]
       - [3.0, 0.5]
       - [5.0, 2.0]
-

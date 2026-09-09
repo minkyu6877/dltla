@@ -4,7 +4,9 @@ import shutil
 import tempfile
 
 from launch import LaunchDescription
-from launch.actions import ExecuteProcess, TimerAction
+from launch.actions import DeclareLaunchArgument, ExecuteProcess, TimerAction
+from launch.conditions import IfCondition
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
 
@@ -27,9 +29,10 @@ def generate_launch_description():
 
     # Work around a Jazzy gz_ros2_control bug that drops nested parameter
     # file paths when forwarding controller node arguments.
-    gazebo_controller_config = os.path.join(
-        tempfile.gettempdir(), 'cargo_robot_controller.yaml'
-    )
+    temporary_config = tempfile.NamedTemporaryFile(
+        prefix='cargo_robot_controller_', suffix='.yaml', delete=False)
+    gazebo_controller_config = temporary_config.name
+    temporary_config.close()
     shutil.copyfile(controller_config, gazebo_controller_config)
     atexit.register(
         lambda: os.path.exists(gazebo_controller_config)
@@ -59,6 +62,15 @@ def generate_launch_description():
         executable='parameter_bridge',
         arguments=[
             '/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock'
+        ],
+        output='screen'
+    )
+
+    pose_bridge = Node(
+        package='ros_gz_bridge',
+        executable='parameter_bridge',
+        arguments=[
+            '/world/warehouse_l_shape/set_pose@ros_gz_interfaces/srv/SetEntityPose'
         ],
         output='screen'
     )
@@ -97,9 +109,10 @@ def generate_launch_description():
             '-world', 'warehouse_l_shape',
             '-string', robot1_description,
             '-name', 'cargo_robot_1',
-            '-x', '1.75',
-            '-y', '0.30',
-            '-z', '0.02'
+            '-x', '0.99',
+            '-y', '0.75',
+            '-z', '0.02',
+            '-Y', '0.0'
         ],
         output='screen'
     )
@@ -110,9 +123,10 @@ def generate_launch_description():
             '-world', 'warehouse_l_shape',
             '-string', robot2_description,
             '-name', 'cargo_robot_2',
-            '-x', '2.25',
-            '-y', '0.30',
-            '-z', '0.02'
+            '-x', '0.46',
+            '-y', '0.75',
+            '-z', '0.02',
+            '-Y', '0.0'
         ],
         output='screen'
     )
@@ -186,10 +200,16 @@ def generate_launch_description():
     qr_reader = Node(
         package='cargo_fleet_manager',
         executable='qr_reader',
+        condition=IfCondition(LaunchConfiguration('start_qr_reader')),
         output='screen'
     )
 
     return LaunchDescription([
+
+        DeclareLaunchArgument(
+            'start_qr_reader',
+            default_value='false',
+            description='Start the physical QR camera reader.'),
 
         gazebo,
 
@@ -213,33 +233,25 @@ def generate_launch_description():
         ),
 
         TimerAction(
-            period=8.0,
+            period=6.0,
             actions=[
-                robot1_jsb,
-                robot2_jsb
+                pose_bridge,
+                Node(
+                    package='cargo_fleet_manager',
+                    executable='kinematic_visualizer',
+                    output='screen',
+                    parameters=[{'use_sim_time': True}],
+                )
             ]
         ),
 
         TimerAction(
-            period=9.0,
-            actions=[
-                robot1_mecanum,
-                robot2_mecanum
-            ]
-        ),
-
-        TimerAction(
-            period=10.0,
-            actions=[uwb_simulator]
-        ),
-
-        TimerAction(
-            period=11.0,
+            period=7.0,
             actions=[mission_manager]
         ),
 
         TimerAction(
-            period=13.0,
+            period=9.0,
             actions=[qr_reader]
         ),
     ])

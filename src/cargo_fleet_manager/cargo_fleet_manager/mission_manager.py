@@ -1,9 +1,7 @@
-import copy
 import heapq
 import json
 import math
 import os
-from collections import deque
 
 import rclpy
 import yaml
@@ -11,7 +9,7 @@ from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import PointStamped, TwistStamped
 from rclpy.node import Node
 from rclpy.signals import SignalHandlerOptions
-from std_msgs.msg import String
+from std_msgs.msg import Float32, String
 
 
 class MissionManager(Node):
@@ -21,15 +19,21 @@ class MissionManager(Node):
     # These rectangles match the shelves in warehouse_l_shape.sdf.  They are
     # enlarged by the robot clearance before planning, so commands never aim
     # through a rack even though the controller itself only follows points.
-    OBSTACLES = (
-        (0.95, 1.45, 0.70, 2.40),
-        (2.10, 3.10, 1.70, 2.20),
-    )
+    # Test layout: empty floor. Add shelf rectangles here for obstacle tests.
+    OBSTACLES = ()
     MAP_BOUNDS = (0.15, 3.85, 0.15, 2.85)
     GRID_SIZE = 0.10
-    ROBOT_CLEARANCE = 0.22
-    LOADING_POINT = (0.40, 0.35)
-    STANDBY_POINT = (2.00, 0.30)
+    ROBOT_CLEARANCE = 0.28
+    # The body plus wheels occupy about 0.35 m across.  Keep an additional
+    # margin so the two simulated robots never enter contact distance.
+    MIN_ROBOT_SEPARATION = 0.44
+    LOADING_POINT = (2.20, 0.75)
+    GREEN_DESTINATION = (3.55, 2.55)
+    DESTINATION_DWELL_SECONDS = 2.0
+    DEFAULT_HOME_POSITIONS = {
+        'robot1': (0.99, 0.75),
+        'robot2': (0.46, 0.75),
+    }
 
     def __init__(self):
         super().__init__('mission_manager')
@@ -46,6 +50,22 @@ class MissionManager(Node):
         rate = float(control.get('control_rate_hz', 20.0))
         if min(self.tolerance, self.max_velocity, self.uwb_timeout, rate) <= 0:
             raise ValueError('Control values in missions.yaml must be positive')
+        self.home_positions = self.load_home_positions(
+            control.get('home_positions'))
+        self.standby_heading = math.radians(
+            float(control.get('standby_heading_deg', 180.0)))
+        self.robot2_uses_uwb = bool(control.get('robot2_uses_uwb', False))
+        self.robot2_target_gap = float(control.get('robot2_target_gap_m', 0.30))
+        self.robot2_gap_tolerance = float(
+            control.get('robot2_gap_tolerance_m', 0.05))
+        self.robot2_emergency_gap = float(
+            control.get('robot2_emergency_gap_m', 0.20))
+        self.robot2_gap_timeout = float(control.get('robot2_gap_timeout', 0.30))
+        self.robot2_gap_kp = float(control.get('robot2_gap_kp', 0.80))
+        if min(self.robot2_target_gap, self.robot2_gap_tolerance,
+               self.robot2_emergency_gap, self.robot2_gap_timeout) <= 0 or \
+                self.robot2_emergency_gap >= self.robot2_target_gap:
+            raise ValueError('Robot 2 ultrasonic gap settings are invalid')
 
         self.position = {robot: None for robot in self.ROBOTS}
         self.position_time = {robot: None for robot in self.ROBOTS}
@@ -58,27 +78,36 @@ class MissionManager(Node):
                 PointStamped, f'/{robot}/uwb_position',
                 lambda msg, r=robot: self.uwb_callback(msg, r), 10)
 
+        self.robot2_gap = None
+        self.robot2_gap_time = None
+        self.create_subscription(
+            Float32, '/robot2/ultrasonic_gap', self.ultrasonic_callback, 10)
+
         self.create_subscription(
             String, '/fleet/mission', self.mission_callback, 10)
         self.state_pub = self.create_publisher(String, '/fleet/state', 10)
+        self.target_pub = self.create_publisher(
+            PointStamped, '/fleet/current_target', 10)
 
-        self.state = 'STANDBY'
+        self.state = 'HOMING'
         self.mission_id = None
         self.route = []
         self.robot_count = 0
         self.assigned_robots = []
         self.waypoint_index = 0
-        self.follower_delay = 0.0
-        self.follower_offset = None
-        self.command_history = deque()
-        self.follower_command = self.make_command(0.0, 0.0)
+        self.destination_dwell_start = None
         self.last_safety_reason = None
+        self.last_proximity_reason = None
         self.delivery_request = None
+        self.home_routes = {}
+        self.home_waypoint_index = {}
+        self.homing_planned = False
+        self.homing_robots = ()
 
         self.timer = self.create_timer(1.0 / rate, self.control_loop)
         self.get_logger().info(
             f'Ready: {len(self.missions)} missions loaded from {self.config_path}')
-        self.get_logger().info('State -> STANDBY; waiting on /fleet/mission')
+        self.start_homing('startup')
 
     @staticmethod
     def load_config(path):
@@ -116,9 +145,31 @@ class MissionManager(Node):
             }
         return missions, data.get('control', {}) or {}
 
+    @classmethod
+    def load_home_positions(cls, raw_positions):
+        raw_positions = raw_positions or cls.DEFAULT_HOME_POSITIONS
+        homes = {}
+        for robot in cls.ROBOTS:
+            point = raw_positions.get(robot) if isinstance(raw_positions, dict) else None
+            if not isinstance(point, (list, tuple)) or len(point) != 2:
+                raise ValueError(
+                    f'home_positions.{robot} must be [x, y] in missions.yaml')
+            homes[robot] = (float(point[0]), float(point[1]))
+        return homes
+
+    @staticmethod
+    def load_point(raw_point, name):
+        if not isinstance(raw_point, (list, tuple)) or len(raw_point) != 2:
+            raise ValueError(f'{name} must be [x, y] in missions.yaml')
+        return float(raw_point[0]), float(raw_point[1])
+
     def uwb_callback(self, msg, robot):
         self.position[robot] = (float(msg.point.x), float(msg.point.y))
         self.position_time[robot] = self.get_clock().now()
+
+    def ultrasonic_callback(self, msg):
+        self.robot2_gap = float(msg.data)
+        self.robot2_gap_time = self.get_clock().now()
 
     def mission_callback(self, msg):
         raw_command = msg.data.strip()
@@ -139,32 +190,31 @@ class MissionManager(Node):
             self.get_logger().error(
                 f'Unknown mission ID {mission_id!r}; robots remain stopped')
             return
-        if self.state == 'RUNNING':
+        if self.state != 'STANDBY':
             self.get_logger().warn(
-                f'Rejected {mission_id}: {self.mission_id} is already running')
+                f'Rejected {mission_id}: fleet is {self.state.lower()}')
             return
 
         self.mission_id = mission_id
         self.route = list(mission['route'])
         self.robot_count = mission['robots']
         self.assigned_robots = list(self.ROBOTS[:self.robot_count])
-        self.follower_delay = mission['follower_delay']
         self.waypoint_index = 0
-        self.follower_offset = None
-        self.command_history.clear()
-        self.follower_command = self.make_command(0.0, 0.0)
+        self.destination_dwell_start = None
         self.last_safety_reason = None
+        self.last_proximity_reason = None
         self.state = 'RUNNING'
         self.stop_all()
         self.get_logger().info(
             f'Mission {mission_id} STARTED: robots={self.robot_count}, '
-            f'waypoints={len(self.route)}, delay={self.follower_delay:.2f}s')
+            f'waypoints={len(self.route)}')
         self.log_waypoint()
 
     def start_delivery(self, request):
         """Start standby -> loading -> requested destination -> standby."""
-        if self.state == 'RUNNING':
-            self.get_logger().warn('Rejected delivery: another mission is running')
+        if self.state != 'STANDBY':
+            self.get_logger().warn(
+                f'Rejected delivery: fleet is {self.state.lower()}')
             return
         try:
             destination = (float(request['dest_x']), float(request['dest_y']))
@@ -191,11 +241,9 @@ class MissionManager(Node):
         self.route = []
         self.delivery_request = {'destination': destination}
         self.waypoint_index = 0
-        self.follower_offset = None
-        self.follower_delay = float(request.get('follower_delay', 0.0))
-        self.command_history.clear()
-        self.follower_command = self.make_command(0.0, 0.0)
+        self.destination_dwell_start = None
         self.last_safety_reason = None
+        self.last_proximity_reason = None
         self.state = 'RUNNING'
         self.stop_all()
         self.get_logger().info(
@@ -212,6 +260,10 @@ class MissionManager(Node):
 
     def plan_segment(self, start, goal):
         """A* route through the warehouse grid, reduced to corner waypoints."""
+        if not self.OBSTACLES:
+            # The obstacle-free test layout should demonstrate direct travel
+            # between the coloured zones rather than an artificial grid turn.
+            return [goal]
         step = self.GRID_SIZE
         to_cell = lambda point: (round(point[0] / step), round(point[1] / step))
         to_point = lambda cell: (cell[0] * step, cell[1] * step)
@@ -262,7 +314,7 @@ class MissionManager(Node):
         for segment_start, segment_goal in (
                 (start, self.LOADING_POINT),
                 (self.LOADING_POINT, destination),
-                (destination, self.STANDBY_POINT)):
+                (destination, self.home_positions['robot1'])):
             route.extend(self.plan_segment(segment_start, segment_goal))
         return route
 
@@ -273,6 +325,12 @@ class MissionManager(Node):
         command.twist.linear.x = float(vx)
         command.twist.linear.y = float(vy)
         return command
+
+    def make_world_command(self, world_vx, world_vy):
+        """Build Gazebo's map/odometry-frame mecanum velocity command."""
+        # The Gazebo reference topic already applies the controller's frame
+        # convention.  A second yaw rotation here reverses navigation.
+        return self.make_command(world_vx, world_vy)
 
     def publish_command(self, robot, command):
         command.header.stamp = self.get_clock().now().to_msg()
@@ -286,9 +344,35 @@ class MissionManager(Node):
             for robot in self.ROBOTS:
                 self.stop_robot(robot)
 
+    def robots_too_close(self):
+        """Stop before the two robot footprints can overlap."""
+        robot1_position = self.position['robot1']
+        robot2_position = self.position['robot2']
+        if robot1_position is None or robot2_position is None:
+            return False
+        distance = math.dist(robot1_position, robot2_position)
+        if distance >= self.MIN_ROBOT_SEPARATION:
+            if self.last_proximity_reason is not None:
+                self.get_logger().info('Robot separation restored; motion resumed')
+                self.last_proximity_reason = None
+            return False
+        self.stop_all()
+        reason = (
+            f'ROBOT PROXIMITY STOP: separation={distance:.2f} m '
+            f'(minimum={self.MIN_ROBOT_SEPARATION:.2f} m)')
+        if reason != self.last_proximity_reason:
+            self.get_logger().warn(reason)
+            self.last_proximity_reason = reason
+        return True
+
     def positions_are_fresh(self):
+        return self.positions_are_fresh_for(self.assigned_robots)
+
+    def positions_are_fresh_for(self, robots):
         now = self.get_clock().now()
-        for robot in self.assigned_robots:
+        for robot in robots:
+            if robot == 'robot2' and not self.robot2_uses_uwb:
+                continue
             stamp = self.position_time[robot]
             if stamp is None:
                 return False, f'waiting for {robot} UWB'
@@ -297,30 +381,140 @@ class MissionManager(Node):
                 return False, f'{robot} UWB stale ({age:.2f}s)'
         return True, None
 
-    def initialize_follower_offset(self):
-        if self.robot_count != 2 or self.follower_offset is not None:
-            return
-        leader_x, leader_y = self.position['robot1']
-        follower_x, follower_y = self.position['robot2']
-        self.follower_offset = (
-            follower_x - leader_x,
-            follower_y - leader_y,
-        )
+    def has_position_feedback(self, robot):
+        return robot != 'robot2' or self.robot2_uses_uwb
+
+    def start_homing(self, reason):
+        """Send each robot to its own standby slot after UWB is available."""
+        self.state = 'HOMING'
+        self.destination_dwell_start = None
+        self.mission_id = None
+        self.route = []
+        self.robot_count = 0
+        self.assigned_robots = []
+        self.waypoint_index = 0
+        self.last_safety_reason = None
+        self.last_proximity_reason = None
+        self.delivery_request = None
+        self.home_routes = {}
+        self.home_waypoint_index = {robot: 0 for robot in self.ROBOTS}
+        self.homing_planned = False
+        self.homing_robots = tuple(
+            robot for robot in self.ROBOTS if self.has_position_feedback(robot))
+        self.stop_all()
         self.get_logger().info(
-            'Robot 2 formation offset captured: '
-            f'({self.follower_offset[0]:.2f}, {self.follower_offset[1]:.2f})')
+            f'HOMING STARTED ({reason}); waiting for UWB before moving to '
+            f'robot1={self.home_positions["robot1"]}')
+        if not self.robot2_uses_uwb:
+            self.get_logger().info(
+                f'Robot 2 has no UWB: hold it at manual standby slot '
+                f'{self.home_positions["robot2"]}')
+
+    def at_point(self, robot, goal):
+        x, y = self.position[robot]
+        return math.hypot(goal[0] - x, goal[1] - y) <= self.tolerance
+
+    def command_to_point(self, robot, goal):
+        if self.at_point(robot, goal):
+            return self.make_command(0.0, 0.0)
+        x, y = self.position[robot]
+        dx, dy = goal[0] - x, goal[1] - y
+        distance = math.hypot(dx, dy)
+        speed = min(self.max_velocity, distance)
+        return self.make_world_command(speed * dx / distance, speed * dy / distance)
+
+    def control_homing(self):
+        fresh, reason = self.positions_are_fresh_for(self.homing_robots)
+        if not fresh:
+            self.stop_all()
+            if reason != self.last_safety_reason:
+                self.get_logger().warn(f'HOMING SAFETY STOP: {reason}')
+                self.last_safety_reason = reason
+            return
+        if self.last_safety_reason is not None:
+            self.get_logger().info('Fresh UWB restored; homing resumed')
+            self.last_safety_reason = None
+        if self.robots_too_close():
+            return
+
+        if not self.homing_planned:
+            try:
+                self.home_routes = {
+                    robot: self.plan_segment(
+                        self.position[robot], self.home_positions[robot])
+                    for robot in self.homing_robots
+                }
+            except ValueError as error:
+                self.stop_all()
+                self.state = 'HOMING_BLOCKED'
+                self.get_logger().error(f'HOMING BLOCKED: {error}')
+                return
+            self.homing_planned = True
+            self.get_logger().info('HOMING route ready; moving to standby slots')
+
+        all_home = True
+        for robot in self.homing_robots:
+            route = self.home_routes[robot]
+            index = self.home_waypoint_index[robot]
+            if index >= len(route):
+                self.stop_robot(robot)
+                continue
+            goal = route[index]
+            if self.at_point(robot, goal):
+                self.home_waypoint_index[robot] += 1
+                self.stop_robot(robot)
+                if self.home_waypoint_index[robot] < len(route):
+                    all_home = False
+                continue
+            all_home = False
+            self.publish_command(robot, self.command_to_point(robot, goal))
+
+        if not all_home:
+            return
+        self.stop_all()
+        self.state = 'STANDBY'
+        self.get_logger().info(
+            'HOMING COMPLETE; state -> STANDBY; waiting on /fleet/mission')
 
     def goal_for(self, robot):
-        x, y = self.route[self.waypoint_index]
-        if robot == 'robot2' and self.follower_offset is not None:
-            x += self.follower_offset[0]
-            y += self.follower_offset[1]
-        return x, y
+        return self.route[self.waypoint_index]
 
     def at_goal(self, robot):
         goal_x, goal_y = self.goal_for(robot)
         x, y = self.position[robot]
         return math.hypot(goal_x - x, goal_y - y) <= self.tolerance
+
+    def assigned_robots_at_goal(self):
+        return all(
+            self.at_goal(robot)
+            for robot in self.assigned_robots
+            if self.has_position_feedback(robot))
+
+    def ultrasonic_gap_is_fresh(self):
+        if self.robot2_gap is None or self.robot2_gap_time is None:
+            return False, 'waiting for robot2 ultrasonic gap'
+        age = (self.get_clock().now() - self.robot2_gap_time).nanoseconds / 1e9
+        if age > self.robot2_gap_timeout:
+            return False, f'robot2 ultrasonic gap stale ({age:.2f}s)'
+        if self.robot2_gap < 0.0:
+            return False, 'robot2 ultrasonic gap is invalid'
+        return True, None
+
+    def ultrasonic_follower_command(self, leader_command):
+        """Gap-controlled request for Robot 2's IMU/encoder drive controller."""
+        gap = self.robot2_gap
+        if gap <= self.robot2_emergency_gap:
+            return self.make_command(0.0, 0.0)
+        error = gap - self.robot2_target_gap
+        # Robot 2 follows behind Robot 1 in the +X travel direction.  When
+        # the gap becomes too small it slows; when it opens it catches up.
+        scale = 1.0 + self.robot2_gap_kp * error
+        if abs(error) <= self.robot2_gap_tolerance:
+            scale = 1.0
+        scale = max(0.25, min(1.25, scale))
+        return self.make_command(
+            leader_command.twist.linear.x * scale,
+            leader_command.twist.linear.y * scale)
 
     def leader_command(self):
         if self.at_goal('robot1'):
@@ -330,18 +524,16 @@ class MissionManager(Node):
         dx, dy = goal_x - x, goal_y - y
         distance = math.hypot(dx, dy)
         speed = min(self.max_velocity, distance)
-        return self.make_command(speed * dx / distance, speed * dy / distance)
-
-    def delayed_follower_command(self, leader_command):
-        now_ns = self.get_clock().now().nanoseconds
-        self.command_history.append((now_ns, copy.deepcopy(leader_command)))
-        cutoff = now_ns - int(self.follower_delay * 1e9)
-        while self.command_history and self.command_history[0][0] <= cutoff:
-            _, self.follower_command = self.command_history.popleft()
-        return copy.deepcopy(self.follower_command)
+        return self.make_world_command(speed * dx / distance, speed * dy / distance)
 
     def log_waypoint(self):
         x, y = self.route[self.waypoint_index]
+        target = PointStamped()
+        target.header.stamp = self.get_clock().now().to_msg()
+        target.header.frame_id = 'world'
+        target.point.x = x
+        target.point.y = y
+        self.target_pub.publish(target)
         self.get_logger().info(
             f'{self.mission_id}: waypoint {self.waypoint_index + 1}/'
             f'{len(self.route)} -> ({x:.2f}, {y:.2f})')
@@ -350,23 +542,42 @@ class MissionManager(Node):
         state = String()
         state.data = self.state
         self.state_pub.publish(state)
+        if self.state == 'HOMING':
+            self.control_homing()
+            return
         if self.state != 'RUNNING':
             return
 
         fresh, reason = self.positions_are_fresh()
         if not fresh:
             self.stop_all()
-            self.command_history.clear()
-            self.follower_command = self.make_command(0.0, 0.0)
             if reason != self.last_safety_reason:
                 self.get_logger().warn(f'SAFETY STOP: {reason}')
                 self.last_safety_reason = reason
             return
+        if self.robot_count == 2:
+            gap_fresh, gap_reason = self.ultrasonic_gap_is_fresh()
+            if not gap_fresh:
+                self.stop_all()
+                if gap_reason != self.last_safety_reason:
+                    self.get_logger().warn(f'SAFETY STOP: {gap_reason}')
+                    self.last_safety_reason = gap_reason
+                return
+            if self.robot2_gap <= self.robot2_emergency_gap:
+                self.stop_all()
+                reason = (
+                    f'ROBOT 2 ULTRASONIC STOP: gap={self.robot2_gap:.2f} m '
+                    f'(minimum={self.robot2_emergency_gap:.2f} m)')
+                if reason != self.last_safety_reason:
+                    self.get_logger().warn(reason)
+                    self.last_safety_reason = reason
+                return
         if self.last_safety_reason is not None:
             self.get_logger().info('Fresh UWB restored; mission resumed')
             self.last_safety_reason = None
+        if self.robots_too_close():
+            return
 
-        self.initialize_follower_offset()
         if self.delivery_request is not None and not self.route:
             try:
                 self.route = self.build_delivery_route()
@@ -382,33 +593,42 @@ class MissionManager(Node):
         leader = self.leader_command()
         self.publish_command('robot1', leader)
         if self.robot_count == 2:
-            # Real deployment boundary: replace this ROS publisher with the
-            # future Raspberry Pi -> Robot 2 ESP32 transport adapter.
+            # Robot 2 firmware uses IMU/encoder feedback to execute this
+            # request; the ultrasonic gap only adjusts its pace.
             self.publish_command(
-                'robot2', self.delayed_follower_command(leader))
+                'robot2', self.ultrasonic_follower_command(leader))
         else:
             self.stop_robot('robot2')
 
         # Only assigned robots are awaited. SMALL missions never wait for robot2.
-        if not all(self.at_goal(robot) for robot in self.assigned_robots):
+        if not self.assigned_robots_at_goal():
             return
-        self.stop_all()
-        self.command_history.clear()
+        goal = self.route[self.waypoint_index]
+        if math.dist(goal, self.GREEN_DESTINATION) <= 1e-6:
+            now = self.get_clock().now()
+            if self.destination_dwell_start is None:
+                self.destination_dwell_start = now
+                self.stop_all()
+                self.get_logger().info(
+                    'GREEN DESTINATION REACHED; unloading for 2.0 seconds')
+                return
+            dwell_age = (
+                now - self.destination_dwell_start).nanoseconds / 1e9
+            if dwell_age < self.DESTINATION_DWELL_SECONDS:
+                self.stop_all()
+                return
+            self.destination_dwell_start = None
         self.get_logger().info(
             f'{self.mission_id}: waypoint {self.waypoint_index + 1} reached')
+        self.stop_all()
         self.waypoint_index += 1
         if self.waypoint_index < len(self.route):
-            self.follower_command = self.make_command(0.0, 0.0)
             self.log_waypoint()
             return
 
-        finished_id = self.mission_id
-        self.state = 'STANDBY'
-        self.mission_id = None
-        self.assigned_robots = []
-        self.delivery_request = None
         self.get_logger().info(
-            f'Mission {finished_id} COMPLETED; state -> STANDBY')
+            f'Mission {self.mission_id} COMPLETED; returning to standby slots')
+        self.start_homing('delivery complete')
 
 
 def main(args=None):

@@ -3,9 +3,16 @@ from rclpy.node import Node
 
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import PointStamped
+from std_msgs.msg import Float32
 
 
 class UwbSimulator(Node):
+    # Gazebo controller odometry starts from (0, 0) for each robot.  UWB must
+    # instead report the shared warehouse coordinate frame used by missions.
+    WORLD_OFFSETS = {
+        'robot1': (0.99, 0.75),
+        'robot2': (0.46, 0.75),
+    }
 
     def __init__(self):
         super().__init__('uwb_simulator')
@@ -21,6 +28,12 @@ class UwbSimulator(Node):
             '/robot2/uwb_position',
             10
         )
+        self.gap_pub = self.create_publisher(
+            Float32,
+            '/robot2/ultrasonic_gap',
+            10
+        )
+        self.positions = {}
 
         self.create_subscription(
             Odometry,
@@ -47,11 +60,21 @@ class UwbSimulator(Node):
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = 'world'
 
-        msg.point.x = odom.pose.pose.position.x
-        msg.point.y = odom.pose.pose.position.y
+        offset_x, offset_y = self.WORLD_OFFSETS[robot_name]
+        msg.point.x = offset_x + odom.pose.pose.position.x
+        msg.point.y = offset_y + odom.pose.pose.position.y
         msg.point.z = 0.0
 
         pub.publish(msg)
+        self.positions[robot_name] = (msg.point.x, msg.point.y)
+        if len(self.positions) == 2:
+            # The actual sensor reads the clear gap between inward-facing
+            # robot bodies, not the centre-to-centre distance.
+            center_distance = ((
+                self.positions['robot1'][0] - self.positions['robot2'][0]) ** 2 + (
+                self.positions['robot1'][1] - self.positions['robot2'][1]) ** 2
+            ) ** 0.5
+            self.gap_pub.publish(Float32(data=max(0.0, center_distance - 0.23)))
 
     def robot1_callback(self, msg):
         self.publish_position(
