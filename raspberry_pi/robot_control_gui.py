@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import socket
 import threading
 import time
@@ -12,6 +13,8 @@ from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+
+from orbit_distance_control import OrbitDistanceControl, OrbitDistanceFault
 
 
 @dataclass(frozen=True)
@@ -27,6 +30,10 @@ class Motion:
 
 def clamp(value: float, low: float, high: float) -> float:
     return max(low, min(high, value))
+
+
+def wrap_degrees(value: float) -> float:
+    return (value + 180.0) % 360.0 - 180.0
 
 
 def parse_status(payload: bytes) -> dict[str, str]:
@@ -69,18 +76,30 @@ def orbit_commands(
     center_offset_cm: float,
     distance_kp: float,
     radial_max: float,
+    tangent_scale: float = 1.0,
 ) -> tuple[dict[int, Motion], dict[str, float]]:
     """Closed-loop inward-facing orbit using Robot 2's live ultrasonic gap."""
     center_radius_cm = max(rotation_radius_cm, gap_cm + center_offset_cm)
+    target_center_radius_cm = max(
+        rotation_radius_cm, target_gap_cm + center_offset_cm
+    )
+    tangent_scale = max(1.0, tangent_scale)
 
     # Firmware mixes w as the equivalent wheel-edge velocity K * omega.
     # Reduce yaw when needed so the required tangential speed stays at or
     # below the GUI's linear-speed limit.
     effective_rotation = min(
         abs(requested_rotation),
-        max_linear * rotation_radius_cm / center_radius_cm,
+        max_linear
+        * rotation_radius_cm
+        / (target_center_radius_cm * tangent_scale),
     )
-    tangent = effective_rotation * center_radius_cm / rotation_radius_cm
+    tangent = (
+        effective_rotation
+        * target_center_radius_cm
+        / rotation_radius_cm
+        * tangent_scale
+    )
     radial = clamp(distance_kp * (gap_cm - target_gap_cm), -radial_max, radial_max)
 
     if direction > 0:  # CCW: from behind Robot 1, tangent is Robot 2's right.
@@ -94,6 +113,8 @@ def orbit_commands(
         "gap_cm": gap_cm,
         "target_gap_cm": target_gap_cm,
         "center_radius_cm": center_radius_cm,
+        "target_center_radius_cm": target_center_radius_cm,
+        "tangent_scale": tangent_scale,
         "tangent_command": tangent,
         "radial_command": radial,
         "rotation_command": effective_rotation,
@@ -101,7 +122,7 @@ def orbit_commands(
 
 
 class RobotCore:
-    def __init__(self, config: dict):
+    def __init__(self, config: dict, *, compute_only: bool = False):
         robot_ips = [str(value) for value in config["robot_ips"]]
         if len(robot_ips) != 2:
             raise ValueError("config.json robot_ips must contain exactly two IP addresses")
@@ -128,29 +149,59 @@ class RobotCore:
             0.0, float(config.get("orbit_center_offset_cm", wheelbase_cm))
         )
         self.orbit_distance_kp = max(0.0, float(config.get("orbit_distance_kp", 0.012)))
+        self.orbit_tangent_scale = clamp(
+            float(config.get("orbit_tangent_scale", 1.10)), 1.0, 2.0
+        )
         self.orbit_radial_max = clamp(
-            float(config.get("orbit_radial_max_speed", 0.08)), 0.01, self.max_speed
+            float(config.get("orbit_radial_max_speed", 0.04)), 0.01, self.max_speed
         )
         self.orbit_yaw_rpm_kp = max(0.0, float(config.get("orbit_yaw_rpm_kp", 0.002)))
         self.orbit_yaw_correction_max = clamp(
             float(config.get("orbit_yaw_correction_max", 0.04)), 0.0, self.max_speed
         )
-        self.orbit_min_gap_cm = max(8.0, float(config.get("orbit_min_gap_cm", 10.0)))
+        self.orbit_encoder_heading_kp = max(
+            0.0, float(config.get("orbit_encoder_heading_kp", 0.14))
+        )
+        self.orbit_encoder_heading_max = clamp(
+            float(config.get("orbit_encoder_heading_max", 0.05)),
+            0.0,
+            self.max_speed,
+        )
+        self.orbit_max_gap_error_cm = max(
+            5.0, float(config.get("orbit_max_gap_error_cm", 15.0))
+        )
+        self.wheel_radius_m = max(0.001, float(config.get("wheel_radius_m", 0.03)))
+        self.rotation_radius_m = self.rotation_radius_cm / 100.0
+        yaw_signs = config.get("imu_yaw_signs", [-1.0, -1.0])
+        if not isinstance(yaw_signs, list) or len(yaw_signs) != 2:
+            raise ValueError("imu_yaw_signs must contain two values")
+        self.imu_yaw_signs = tuple(
+            1.0 if float(value) >= 0.0 else -1.0 for value in yaw_signs
+        )
+        self.orbit_min_gap_cm = max(18.0, float(config.get("orbit_min_gap_cm", 18.0)))
         self.orbit_max_gap_cm = max(
             self.orbit_min_gap_cm, float(config.get("orbit_max_gap_cm", 150.0))
         )
+        distance_config = dict(config)
+        distance_config.update(orbit_min_gap_cm=self.orbit_min_gap_cm,
+                               orbit_radial_max_speed=self.orbit_radial_max)
+        self.orbit_distance = OrbitDistanceControl(distance_config)
 
-        self.udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.udp.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        try:
-            self.udp.bind(("0.0.0.0", status_port))
-        except OSError as exc:
-            self.udp.close()
-            raise RuntimeError(
-                f"Cannot use UDP status port {status_port}. Stop manual_drive.py, "
-                "qr_dual_robot.py, and robot_status_monitor.py first."
-            ) from exc
-        self.udp.setblocking(False)
+        # The autonomous route can reuse calibrated orbit calculations while
+        # FormationSystem remains the sole owner of the UDP port/transport.
+        self.udp = None
+        if not compute_only:
+            self.udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            self.udp.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                self.udp.bind(("0.0.0.0", status_port))
+            except OSError as exc:
+                self.udp.close()
+                raise RuntimeError(
+                    f"Cannot use UDP status port {status_port}. Stop manual_drive.py, "
+                    "qr_dual_robot.py, and robot_status_monitor.py first."
+                ) from exc
+            self.udp.setblocking(False)
 
         self.lock = threading.RLock()
         self.snapshots: dict[str, tuple[float, dict[str, str]]] = {}
@@ -162,8 +213,12 @@ class RobotCore:
         self.orbit_target_gap_cm: float | None = None
         self.orbit_linear_limit = self.default_linear
         self.orbit_rotation_request = self.default_rotation
-        self.orbit_telemetry: dict[str, float] = {}
+        self.orbit_telemetry: dict[str, Any] = {}
         self.orbit_yaw_error_filtered = 0.0
+        self.orbit_yaw_delta_target_deg: float | None = None
+        self.orbit_encoder_heading_error_rad = 0.0
+        self.orbit_heading_updated_at = 0.0
+        self.orbit_fault_latched = False
         self.running = threading.Event()
         self.running.set()
         self.worker = threading.Thread(target=self._run, name="robot-udp", daemon=True)
@@ -173,6 +228,8 @@ class RobotCore:
         self.worker.start()
 
     def _send(self, message: str, indexes: tuple[int, ...]) -> None:
+        if self.udp is None:
+            raise RuntimeError("Compute-only orbit controller cannot send robot commands")
         payload = message.encode("utf-8")
         for index in indexes:
             self.udp.sendto(payload, self.addresses[index])
@@ -190,6 +247,7 @@ class RobotCore:
             self.deadline = 0.0
             self.safety_message = reason
             self.orbit_direction = 0
+            self.orbit_fault_latched = False
         self._send_stop(repeat=3)
 
     def _fields(self, index: int, now: float, timeout: float = 1.5) -> dict[str, str]:
@@ -235,22 +293,40 @@ class RobotCore:
             return None
         return (-fl + fr - rl + rr) / 4.0
 
+    def _imu_yaw_deg(self, index: int, now: float) -> float | None:
+        fields = self._fields(index, now)
+        if fields.get("imu_ok") != "1":
+            return None
+        try:
+            raw_yaw = float(fields["att_deg"].split(":")[2])
+        except (KeyError, IndexError, TypeError, ValueError):
+            return None
+        return wrap_degrees(self.imu_yaw_signs[index] * raw_yaw)
+
     def _robot2_gap(self, now: float) -> float | None:
         raw = self._fields(1, now).get("distance_cm")
         try:
             gap = float(raw) if raw is not None else None
         except ValueError:
             return None
-        if gap is None or not self.orbit_min_gap_cm <= gap <= self.orbit_max_gap_cm:
+        if gap is None or not math.isfinite(gap) or not self.orbit_min_gap_cm < gap <= self.orbit_max_gap_cm:
             return None
         return gap
 
     def _update_orbit_commands(self, now: float) -> bool:
         if self.orbit_direction == 0 or self.orbit_target_gap_cm is None:
             return True
-        gap = self._robot2_gap(now)
-        if gap is None:
+        snapshot = self.snapshots.get(self.robot_ips[1])
+        raw_gap = self._fields(1, now).get("distance_cm")
+        try:
+            radial = self.orbit_distance.update(raw_gap, snapshot[0] if snapshot else None, now)
+        except OrbitDistanceFault:
+            self.orbit_telemetry.update(self.orbit_distance.telemetry())
+            self.orbit_telemetry.update(tangent_command=0.0, rotation_command=0.0,
+                                        r1_vx=0.0, r1_vy=0.0, r1_w=0.0,
+                                        r2_vx=0.0, r2_vy=0.0, r2_w=0.0)
             return False
+        gap = self.orbit_distance.filtered
         commands, telemetry = orbit_commands(
             self.orbit_direction,
             self.orbit_linear_limit,
@@ -261,10 +337,15 @@ class RobotCore:
             self.orbit_center_offset_cm,
             self.orbit_distance_kp,
             self.orbit_radial_max,
+            self.orbit_tangent_scale,
         )
+        robot2 = commands[1]
+        commands[1] = Motion(radial, robot2.vy, robot2.w, robot2.name)
+        telemetry.update(self.orbit_distance.telemetry())
         yaw_rpm_1 = self._yaw_rpm(0, now)
         yaw_rpm_2 = self._yaw_rpm(1, now)
         yaw_correction = 0.0
+        encoder_heading_correction = 0.0
         if yaw_rpm_1 is not None and yaw_rpm_2 is not None:
             yaw_error = yaw_rpm_1 - yaw_rpm_2
             self.orbit_yaw_error_filtered = (
@@ -275,12 +356,25 @@ class RobotCore:
                 -self.orbit_yaw_correction_max,
                 self.orbit_yaw_correction_max,
             )
-            robot2 = commands[1]
-            commands[1] = Motion(
-                robot2.vx,
-                robot2.vy,
-                clamp(robot2.w + yaw_correction, -self.max_speed, self.max_speed),
-                robot2.name,
+            dt = clamp(now - self.orbit_heading_updated_at, 0.0, 0.20)
+            if self.orbit_heading_updated_at > 0.0:
+                wheel_speed_error_mps = (
+                    yaw_error * 2.0 * math.pi * self.wheel_radius_m / 60.0
+                )
+                self.orbit_encoder_heading_error_rad += (
+                    wheel_speed_error_mps / self.rotation_radius_m * dt
+                )
+                self.orbit_encoder_heading_error_rad = clamp(
+                    self.orbit_encoder_heading_error_rad,
+                    -math.radians(45.0),
+                    math.radians(45.0),
+                )
+            self.orbit_heading_updated_at = now
+            encoder_heading_correction = clamp(
+                self.orbit_encoder_heading_kp
+                * self.orbit_encoder_heading_error_rad,
+                -self.orbit_encoder_heading_max,
+                self.orbit_encoder_heading_max,
             )
             telemetry.update(
                 {
@@ -288,8 +382,48 @@ class RobotCore:
                     "yaw_rpm_robot2": yaw_rpm_2,
                     "yaw_rpm_error": yaw_error,
                     "yaw_correction": yaw_correction,
+                    "encoder_heading_error_deg": math.degrees(
+                        self.orbit_encoder_heading_error_rad
+                    ),
+                    "encoder_heading_correction": encoder_heading_correction,
                 }
             )
+        imu_yaw_1 = self._imu_yaw_deg(0, now)
+        imu_yaw_2 = self._imu_yaw_deg(1, now)
+        if (
+            imu_yaw_1 is not None
+            and imu_yaw_2 is not None
+            and self.orbit_yaw_delta_target_deg is not None
+        ):
+            yaw_delta = wrap_degrees(imu_yaw_2 - imu_yaw_1)
+            imu_yaw_error = wrap_degrees(
+                self.orbit_yaw_delta_target_deg - yaw_delta
+            )
+            telemetry.update(
+                {
+                    "imu_yaw_robot1_deg": imu_yaw_1,
+                    "imu_yaw_robot2_deg": imu_yaw_2,
+                    "imu_yaw_delta_target_deg": self.orbit_yaw_delta_target_deg,
+                    "imu_yaw_error_deg": imu_yaw_error,
+                    "imu_yaw_correction": 0.0,
+                }
+            )
+        if yaw_correction != 0.0 or encoder_heading_correction != 0.0:
+            robot2 = commands[1]
+            commands[1] = Motion(
+                robot2.vx,
+                robot2.vy,
+                clamp(
+                    robot2.w + yaw_correction + encoder_heading_correction,
+                    -self.max_speed,
+                    self.max_speed,
+                ),
+                robot2.name,
+            )
+        for index, command in commands.items():
+            telemetry.update({f"r{index + 1}_vx": command.vx,
+                              f"r{index + 1}_vy": command.vy,
+                              f"r{index + 1}_w": command.w})
         self.active_commands = commands
         self.orbit_telemetry = telemetry
         return True
@@ -334,22 +468,45 @@ class RobotCore:
                 self._send_stop()
                 return False, alert
             if orbit_direction != 0:
-                gap = self._robot2_gap(now)
-                if gap is None:
+                if self.orbit_fault_latched:
                     self.active_commands = {}
-                    self.active_name = "STOP"
-                    self.safety_message = "Robot 2 ultrasonic gap is invalid"
+                    self.active_name = "ORBIT_SENSOR_STOP"
+                    self.safety_message = "Orbit distance stop: " + (self.orbit_distance.fault_reason or "FAULT_LATCHED")
                     self.orbit_direction = 0
                     self._send_stop()
                     return False, self.safety_message
                 if self.orbit_direction != orbit_direction or self.orbit_target_gap_cm is None:
+                    gap = self._robot2_gap(now)
+                    if gap is None:
+                        self.active_commands = {}
+                        self.active_name = "STOP"
+                        self.safety_message = "Robot 2 ultrasonic gap is invalid (must be >18cm)"
+                        self.orbit_direction = 0
+                        self._send_stop()
+                        return False, self.safety_message
                     self.orbit_target_gap_cm = gap
+                    self.orbit_distance.reset(gap, now)
                     self.orbit_yaw_error_filtered = 0.0
+                    self.orbit_encoder_heading_error_rad = 0.0
+                    self.orbit_heading_updated_at = now
+                    yaw1 = self._imu_yaw_deg(0, now)
+                    yaw2 = self._imu_yaw_deg(1, now)
+                    self.orbit_yaw_delta_target_deg = (
+                        None
+                        if yaw1 is None or yaw2 is None
+                        else wrap_degrees(yaw2 - yaw1)
+                    )
                 self.orbit_direction = orbit_direction
                 self.orbit_linear_limit = linear
                 self.orbit_rotation_request = rotation
                 if not self._update_orbit_commands(now):
-                    return False, "Robot 2 ultrasonic gap is invalid"
+                    self.active_commands = {}
+                    self.active_name = "ORBIT_SENSOR_STOP"
+                    self.safety_message = "Orbit distance stop: " + self.orbit_distance.fault_reason
+                    self.orbit_direction = 0
+                    self.orbit_fault_latched = True
+                    self._send_stop(repeat=3)
+                    return False, self.safety_message
                 commands = self.active_commands
             else:
                 self.orbit_direction = 0
@@ -415,8 +572,9 @@ class RobotCore:
                     elif self.orbit_direction != 0 and not self._update_orbit_commands(now):
                         self.active_commands = {}
                         self.active_name = "ORBIT_SENSOR_STOP"
-                        self.safety_message = "Robot 2 ultrasonic gap lost during orbit"
+                        self.safety_message = "Orbit distance stop: " + self.orbit_distance.fault_reason
                         self.orbit_direction = 0
+                        self.orbit_fault_latched = True
                         self._send_stop(repeat=3)
 
                 if now >= next_command and self.active_commands:
@@ -457,7 +615,8 @@ class RobotCore:
                     "active": self.orbit_direction != 0,
                     "rotation_radius_cm": round(self.rotation_radius_cm, 2),
                     "center_offset_cm": round(self.orbit_center_offset_cm, 2),
-                    **{key: round(value, 3) for key, value in self.orbit_telemetry.items()},
+                    **{key: round(value, 3) if isinstance(value, (int, float)) else value
+                       for key, value in self.orbit_telemetry.items()},
                 },
                 "defaults": {
                     "linear": self.default_linear,
@@ -468,6 +627,9 @@ class RobotCore:
             }
 
     def close(self) -> None:
+        if self.udp is None:
+            self.running.clear()
+            return
         self.stop("PROGRAM EXIT")
         self.running.clear()
         if self.worker.is_alive():
@@ -523,7 +685,7 @@ const $=id=>document.getElementById(id);
 const esc=v=>String(v??'-').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function vector(v){const a=String(v||'').split(':');return a.length===4?a:['-','-','-','-']}
 function robotCard(r){const f=r.fields||{},dist=parseFloat(f.distance_cm),stop=parseFloat(f.stop_cm),valid=Number.isFinite(dist);let pct=valid?Math.min(100,dist):0;let color=!valid?'#64748b':(f.obstacle==='1'||(Number.isFinite(stop)&&dist<=stop))?'#ff5c6c':dist<30?'#ffbf47':'#35d39a';const t=vector(f.target_rpm),a=vector(f.rpm),p=vector(f.drive_pwm);let rows=['FL','FR','RL','RR'].map((w,i)=>`<tr><td>${w}</td><td>${esc(t[i])}</td><td>${esc(a[i])}</td><td>${esc(p[i])}</td></tr>`).join('');let imu=f.imu_ok!==undefined?`<div class="metric"><div class="label">IMU</div><div class="value">${f.imu_ok==='1'?'OK':'ERROR'}</div></div><div class="metric"><div class="label">자세 R:P:Y</div><div class="value">${esc(f.att_deg)}</div></div><div class="metric"><div class="label">Gyro</div><div class="value">${esc(f.gyro_dps)}</div></div>`:'';return `<div class="card"><div class="row between"><h2>Robot ${r.number}</h2><span class="${r.online?'online':'offline'} value">${r.online?'ONLINE':'OFFLINE'}</span></div><div class="label">${esc(r.ip)} · ${esc(f.fw)}</div><div class="distance">${valid?dist.toFixed(1):'--'} <small style="font-size:16px;color:var(--muted)">cm</small></div><div class="bar"><div style="width:${pct}%;background:${color}"></div></div><div class="meta"><div class="metric"><div class="label">센서 역할</div><div class="value">${esc(f.sensor_role)}</div></div><div class="metric"><div class="label">정지 기준</div><div class="value">${esc(f.stop_cm)} cm</div></div><div class="metric"><div class="label">상태</div><div class="value">${esc(f.state)}</div></div><div class="metric"><div class="label">RSSI</div><div class="value">${esc(f.rssi)} dBm</div></div><div class="metric"><div class="label">안전 래치</div><div class="value" style="color:${f.obstacle==='1'?'var(--bad)':'var(--good)'}">${f.obstacle==='1'?'STOP':'CLEAR'}</div></div>${imu}</div><table><thead><tr><th>Wheel</th><th>Target</th><th>RPM</th><th>PWM</th></tr></thead><tbody>${rows}</tbody></table></div>`}
-async function poll(){try{const d=await fetch('/api/status',{cache:'no-store'}).then(r=>r.json());if(!initialized){for(const id of ['linear','rotation']){const el=$(id);el.min=d.defaults.minimum;el.max=d.defaults.maximum;el.value=d.defaults[id];$(id+'Value').textContent=Number(el.value).toFixed(2)}initialized=true}$('robots').innerHTML=d.robots.map(robotCard).join('');$('motion').textContent=d.motion;const online=d.robots.filter(r=>r.online).length;$('fleet').textContent=`ROBOTS ${online}/2`;$('fleet').className='pill '+(online===2?'good':'bad');$('alert').textContent=d.safety;$('alert').className='alert '+(d.safety==='READY'?'':'bad');const o=d.orbit||{};const rpm=o.yaw_rpm_error!==undefined?` · 회전RPM R1 ${o.yaw_rpm_robot1} / R2 ${o.yaw_rpm_robot2} · 보정 ${o.yaw_correction}`:'';$('orbitInfo').textContent=o.target_gap_cm!==undefined?`${o.active?'공전 제어 중':'마지막 공전'} · 실측 간격 ${o.gap_cm}cm / 목표 ${o.target_gap_cm}cm · 추정 중심 반지름 ${o.center_radius_cm}cm · 횡이동 ${o.tangent_command} · 전후보정 ${o.radial_command} · 회전 ${o.rotation_command}${rpm}`:`공전 대기 · K=${o.rotation_radius_cm||'-'}cm · 시작 시 현재 초음파 간격을 목표로 자동 저장합니다.`}catch(e){$('fleet').textContent='GUI 연결 끊김';$('fleet').className='pill bad'}}
+async function poll(){try{const d=await fetch('/api/status',{cache:'no-store'}).then(r=>r.json());if(!initialized){for(const id of ['linear','rotation']){const el=$(id);el.min=d.defaults.minimum;el.max=d.defaults.maximum;el.value=d.defaults[id];$(id+'Value').textContent=Number(el.value).toFixed(2)}initialized=true}$('robots').innerHTML=d.robots.map(robotCard).join('');$('motion').textContent=d.motion;const online=d.robots.filter(r=>r.online).length;$('fleet').textContent=`ROBOTS ${online}/2`;$('fleet').className='pill '+(online===2?'good':'bad');$('alert').textContent=d.safety;$('alert').className='alert '+(d.safety==='READY'?'':'bad');const o=d.orbit||{};const rpm=o.yaw_rpm_error!==undefined?` · 회전RPM R1 ${o.yaw_rpm_robot1} / R2 ${o.yaw_rpm_robot2} · 보정 ${o.yaw_correction}`:'';$('orbitInfo').textContent=o.target_gap_cm!==undefined?`${o.active?'공전 제어 중':'마지막 공전'} · 원시 ${o.gap_cm}cm → 보정용 ${o.gap_filtered_cm??'-'}cm / 목표 ${o.target_gap_cm}cm · 추정 중심 반지름 ${o.center_radius_cm}cm · 횡이동 ${o.tangent_command} · 전후보정 ${o.radial_command} · 회전 ${o.rotation_command} · 거리 상태 ${o.gap_filter_state||'-'}${rpm}`:`공전 대기 · K=${o.rotation_radius_cm||'-'}cm · 시작 시 현재 초음파 간격을 목표로 자동 저장합니다.`}catch(e){$('fleet').textContent='GUI 연결 끊김';$('fleet').className='pill bad'}}
 setInterval(poll,250);poll();
 for(const id of ['linear','rotation'])$(id).addEventListener('input',e=>$(id+'Value').textContent=Number(e.target.value).toFixed(2));
 document.querySelectorAll('[data-select]').forEach(b=>b.onclick=()=>{selected=b.dataset.select.split(',').map(Number);document.querySelectorAll('[data-select]').forEach(x=>x.classList.toggle('selected',x===b));stopMotion()});

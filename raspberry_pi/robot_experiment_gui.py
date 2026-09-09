@@ -113,7 +113,7 @@ class ExperimentManager:
     def start_straight(self, robot: int, speed: float) -> tuple[bool, str]:
         if robot not in (0, 1):
             return False, "로봇 번호가 잘못되었습니다."
-        return self.launch("STRAIGHT", self.run_straight, robot, max(0.05, min(0.25, speed)))
+        return self.launch("STRAIGHT", self.run_straight, robot, max(0.20, min(0.40, speed)))
 
     def start_orbit(self, direction: str, linear: float, rotation: float) -> tuple[bool, str]:
         if direction not in ("u", "i"):
@@ -149,59 +149,73 @@ class ExperimentManager:
             raise RuntimeError(reason)
 
     def run_rpm(self, robot: int) -> None:
-        speeds = [float(value) for value in self.config.get("experiment_rpm_speeds", [0.10, 0.15, 0.20])]
+        speeds = [float(value) for value in self.config.get("experiment_rpm_speeds", [0.20, 0.30, 0.40])]
         warmup = float(self.config.get("experiment_rpm_warmup_sec", 1.0))
         sample_time = float(self.config.get("experiment_rpm_sample_sec", 3.0))
         rest = float(self.config.get("experiment_rest_sec", 1.0))
         rows: list[dict[str, Any]] = []
+        directions = (("FORWARD", "w"), ("REVERSE", "s"))
+        total_steps = len(speeds) * len(directions)
+        step = 0
 
-        for step, speed in enumerate(speeds):
-            self.core.stop("RPM STEP")
-            phase_start = time.monotonic()
-            while time.monotonic() - phase_start < warmup:
-                if not self.can_continue():
-                    return
-                self.keep_moving("w", (robot,), speed, 0.10)
-                self.set_state("RPM", f"Robot {robot + 1} · 속도 {speed:.2f} 워밍업")
-                time.sleep(0.10)
+        for direction, movement_key in directions:
+            korean_direction = "정방향" if direction == "FORWARD" else "역방향"
+            for speed in speeds:
+                self.core.stop("RPM STEP")
+                phase_start = time.monotonic()
+                while time.monotonic() - phase_start < warmup:
+                    if not self.can_continue():
+                        return
+                    self.keep_moving(movement_key, (robot,), speed, 0.10)
+                    self.set_state(
+                        "RPM", f"Robot {robot + 1} · {korean_direction} {speed:.2f} 워밍업"
+                    )
+                    time.sleep(0.10)
 
-            samples: list[tuple[tuple[float, ...], tuple[float, ...], tuple[float, ...]]] = []
-            last_timestamp = 0.0
-            phase_start = time.monotonic()
-            while time.monotonic() - phase_start < sample_time:
-                if not self.can_continue():
-                    return
-                self.keep_moving("w", (robot,), speed, 0.10)
-                fresh = self.new_fields(robot, last_timestamp)
-                if fresh is not None:
-                    last_timestamp, fields = fresh
-                    target = parse_vector(fields, "target_rpm")
-                    actual = parse_vector(fields, "rpm")
-                    pwm = parse_vector(fields, "drive_pwm")
-                    if target and actual and pwm:
-                        samples.append((target, actual, pwm))
-                elapsed = time.monotonic() - phase_start
-                self.set_state("RPM", f"Robot {robot + 1} · 속도 {speed:.2f} 측정 {elapsed:.1f}/{sample_time:.1f}초", (step + elapsed / sample_time) / len(speeds))
-                time.sleep(0.10)
+                samples: list[tuple[tuple[float, ...], tuple[float, ...], tuple[float, ...]]] = []
+                last_timestamp = 0.0
+                phase_start = time.monotonic()
+                while time.monotonic() - phase_start < sample_time:
+                    if not self.can_continue():
+                        return
+                    self.keep_moving(movement_key, (robot,), speed, 0.10)
+                    fresh = self.new_fields(robot, last_timestamp)
+                    if fresh is not None:
+                        last_timestamp, fields = fresh
+                        target = parse_vector(fields, "target_rpm")
+                        actual = parse_vector(fields, "rpm")
+                        pwm = parse_vector(fields, "drive_pwm")
+                        if target and actual and pwm:
+                            samples.append((target, actual, pwm))
+                    elapsed = time.monotonic() - phase_start
+                    self.set_state(
+                        "RPM",
+                        f"Robot {robot + 1} · {korean_direction} {speed:.2f} 측정 "
+                        f"{elapsed:.1f}/{sample_time:.1f}초",
+                        (step + elapsed / sample_time) / total_steps,
+                    )
+                    time.sleep(0.10)
 
-            self.core.stop("RPM STEP COMPLETE")
-            for wheel_index, wheel in enumerate(WHEELS):
-                targets = [sample[0][wheel_index] for sample in samples]
-                actuals = [sample[1][wheel_index] for sample in samples]
-                pwms = [sample[2][wheel_index] for sample in samples]
-                rows.append({
-                    "robot": robot + 1, "speed_command": speed, "wheel": wheel,
-                    "sample_count": len(actuals), "target_rpm_mean": average(targets),
-                    "actual_rpm_mean": average(actuals),
-                    "actual_rpm_stdev": statistics.pstdev(actuals) if len(actuals) > 1 else 0.0 if actuals else None,
-                    "rpm_error_mean": average([target - actual for target, actual in zip(targets, actuals)]),
-                    "pwm_mean": average(pwms),
-                })
-            rest_deadline = time.monotonic() + rest
-            while time.monotonic() < rest_deadline:
-                if not self.can_continue():
-                    return
-                time.sleep(0.10)
+                self.core.stop("RPM STEP COMPLETE")
+                for wheel_index, wheel in enumerate(WHEELS):
+                    targets = [sample[0][wheel_index] for sample in samples]
+                    actuals = [sample[1][wheel_index] for sample in samples]
+                    pwms = [sample[2][wheel_index] for sample in samples]
+                    rows.append({
+                        "robot": robot + 1, "direction": direction,
+                        "speed_command": speed, "wheel": wheel,
+                        "sample_count": len(actuals), "target_rpm_mean": average(targets),
+                        "actual_rpm_mean": average(actuals),
+                        "actual_rpm_stdev": statistics.pstdev(actuals) if len(actuals) > 1 else 0.0 if actuals else None,
+                        "rpm_error_mean": average([target - actual for target, actual in zip(targets, actuals)]),
+                        "pwm_mean": average(pwms),
+                    })
+                step += 1
+                rest_deadline = time.monotonic() + rest
+                while time.monotonic() < rest_deadline:
+                    if not self.can_continue():
+                        return
+                    time.sleep(0.10)
 
         result = {"type": "rpm", "robot": robot + 1, "rows": rows}
         self.save_result(result, rows)
@@ -257,13 +271,24 @@ class ExperimentManager:
         max_time = float(self.config.get("experiment_max_orbit_sec", 60.0))
         start = time.monotonic()
         samples: list[dict[str, Any]] = []
+        stop_reason = ""
         while not self.finish_requested.is_set() and time.monotonic() - start < max_time:
             if not self.can_continue():
                 return
-            self.keep_moving(direction, (0, 1), linear, rotation)
+            try:
+                self.keep_moving(direction, (0, 1), linear, rotation)
+            except RuntimeError as exc:
+                stop_reason = str(exc)
+                fault_sample = dict(self.core.status().get("orbit", {}))
+                fault_sample["elapsed_sec"] = time.monotonic() - start
+                fault_sample["stop_reason"] = stop_reason
+                samples.append(fault_sample)
+                break
             orbit = self.core.status().get("orbit", {})
             if orbit.get("gap_cm") is not None:
-                samples.append(dict(orbit))
+                sample = dict(orbit)
+                sample["elapsed_sec"] = time.monotonic() - start
+                samples.append(sample)
             elapsed = time.monotonic() - start
             self.set_state("ORBIT", f"공전 중 · 한 바퀴 후 종료 버튼을 누르세요 · {elapsed:.1f}초", min(0.99, elapsed / max_time))
             time.sleep(0.10)
@@ -272,16 +297,34 @@ class ExperimentManager:
             "type": "orbit", "direction": "CCW" if direction == "u" else "CW",
             "linear_limit": linear, "rotation_request": rotation,
             "duration_sec": time.monotonic() - start, "sample_count": len(samples),
+            "stop_reason": stop_reason or "USER_FINISH_OR_TIMEOUT",
             "manual_measurements": {},
         }
-        metrics = ("gap_cm", "target_gap_cm", "center_radius_cm", "yaw_rpm_robot1", "yaw_rpm_robot2", "yaw_rpm_error", "yaw_correction", "radial_command", "rotation_command")
+        metrics = (
+            "gap_cm", "gap_filtered_cm", "gap_error_cm", "target_gap_cm", "center_radius_cm",
+            "target_center_radius_cm", "tangent_command", "tangent_scale",
+            "yaw_rpm_robot1", "yaw_rpm_robot2", "yaw_rpm_error",
+            "yaw_correction", "encoder_heading_error_deg",
+            "encoder_heading_correction", "imu_yaw_robot1_deg", "imu_yaw_robot2_deg",
+            "imu_yaw_error_deg", "imu_yaw_correction",
+            "radial_requested", "radial_command", "rotation_command",
+            "gap_pending_samples", "gap_rejected_total",
+            "r1_vx", "r1_vy", "r1_w", "r2_vx", "r2_vy", "r2_w",
+        )
         for metric in metrics:
             values = [float(sample[metric]) for sample in samples if sample.get(metric) is not None]
             result[f"{metric}_min"] = min(values) if values else None
             result[f"{metric}_mean"] = average(values)
             result[f"{metric}_max"] = max(values) if values else None
-        self.save_result(result, self.metric_rows(result))
-        self.set_state("COMPLETE", "공전 시험 완료 · 최종 위치 오차를 아래에 입력하세요.", 1.0)
+        self.save_result(result, samples)
+        if stop_reason:
+            self.set_state(
+                "STOPPED",
+                f"공전 자동정지 · 로그 저장 완료 · {stop_reason}",
+                1.0,
+            )
+        else:
+            self.set_state("COMPLETE", "공전 시험 완료 · 최종 위치 오차를 아래에 입력하세요.", 1.0)
 
     @staticmethod
     def metric_rows(result: dict[str, Any]) -> list[dict[str, Any]]:
@@ -347,13 +390,14 @@ class ExperimentManager:
 HTML = r"""<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Robot Experiment Lab</title><style>
 :root{--bg:#08111e;--card:#111e2f;--line:#293b52;--text:#edf4fc;--muted:#95a9c0;--green:#3bd6a0;--red:#ff6374}*{box-sizing:border-box}body{margin:0;background:linear-gradient(145deg,#13253d,var(--bg) 42%);color:var(--text);font-family:system-ui,"Noto Sans KR",sans-serif}.wrap{max-width:1250px;margin:auto;padding:22px}.top,.row{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}h1{font-size:25px;margin:0}h2{font-size:18px;margin:0 0 12px}.muted{color:var(--muted);font-size:13px}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:15px}.card{background:rgba(17,30,47,.97);border:1px solid var(--line);border-radius:15px;padding:17px}.robots{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px}.rpms{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:10px}.metric{background:#091625;border-radius:9px;padding:8px}.label{font-size:11px;color:var(--muted)}.value{font-weight:750}.online{color:var(--green)}.offline{color:var(--red)}button{border:1px solid #3a5879;background:#17304c;color:var(--text);border-radius:10px;padding:11px 13px;font-weight:750;cursor:pointer}.danger{background:#8a2635;border-color:#c24b5c;font-size:17px}.finish{background:#765316}input,select,textarea{width:100%;border:1px solid #334a64;background:#091625;color:var(--text);border-radius:9px;padding:10px;margin:5px 0 10px}.progress{height:11px;background:#07101c;border-radius:20px;overflow:hidden;margin:10px 0}.progress div{height:100%;background:linear-gradient(90deg,#4ca6ff,var(--green));width:0}.status{padding:13px;border-radius:11px;background:#091625;font-weight:700}.wide{margin-top:14px}.files a{color:#78bdff;margin-right:14px}pre{max-height:260px;overflow:auto;background:#07111d;border-radius:10px;padding:12px;color:#bdd0e5}@media(max-width:900px){.grid{grid-template-columns:1fr}.robots{grid-template-columns:1fr}.wrap{padding:13px}}</style></head><body><div class="wrap">
 <div class="top"><div><h1>Robot Experiment Lab</h1><div class="muted">RPM · 1m 직진 · 공전 자동 기록</div></div><button class="danger" onclick="stopAll()">두 로봇 비상정지</button></div><div id="robots" class="robots"></div><div class="grid">
-<div class="card"><h2>3. RPM 자동 시험</h2><p class="muted">바퀴를 띄우세요. config.json에 지정한 속도를 순서대로 자동 측정합니다.</p><div class="row"><button onclick="start({type:'rpm',robot:0})">Robot 1</button><button onclick="start({type:'rpm',robot:1})">Robot 2</button></div></div>
-<div class="card"><h2>4. 1m 직진 시험</h2><select id="sr"><option value="0">Robot 1</option><option value="1">Robot 2</option></select><input id="ss" type="number" value="0.10" min="0.05" max="0.25" step="0.01"><button onclick="startStraight()">직진 시작</button> <button class="finish" onclick="finish()">1m 도착·종료</button></div>
-<div class="card"><h2>5. 공전 시험</h2><select id="od"><option value="u">반시계</option><option value="i">시계</option></select><div class="row"><input id="ol" type="number" value="0.10" min="0.05" max="0.25" step="0.01"><input id="or" type="number" value="0.10" min="0.05" max="0.25" step="0.01"></div><button onclick="startOrbit()">공전 시작</button> <button class="finish" onclick="finish()">한 바퀴·종료</button></div></div>
-<div class="card wide"><div class="row"><h2>진행 상태</h2><strong id="mode">IDLE</strong></div><div class="progress"><div id="bar"></div></div><div id="msg" class="status">준비 중</div></div>
+<div class="card"><h2>3. RPM 자동 시험</h2><p class="muted">반드시 바퀴를 띄우세요. 0.20/0.30/0.40을 정방향과 역방향으로 자동 측정합니다.</p><div class="row"><button onclick="start({type:'rpm',robot:0})">Robot 1</button><button onclick="start({type:'rpm',robot:1})">Robot 2</button></div></div>
+<div class="card"><h2>4. 1m 직진 시험</h2><select id="sr"><option value="0">Robot 1</option><option value="1">Robot 2</option></select><input id="ss" type="number" value="0.30" min="0.20" max="0.40" step="0.01"><button onclick="startStraight()">직진 시작</button> <button class="finish" onclick="finish()">1m 도착·종료</button></div>
+<div class="card"><h2>5. 공전 시험</h2><select id="od"><option value="u">반시계</option><option value="i">시계</option></select><div class="row"><input id="ol" type="number" value="0.22" min="0.05" max="0.25" step="0.01"><input id="or" type="number" value="0.10" min="0.05" max="0.25" step="0.01"></div><button onclick="startOrbit()">공전 시작</button> <button class="finish" onclick="finish()">한 바퀴·종료</button></div></div>
+<div class="card wide"><div class="row"><h2>진행 상태</h2><strong id="mode">IDLE</strong></div><div class="progress"><div id="bar"></div></div><div id="msg" class="status">준비 중</div><div id="orbitStatus" class="muted" style="margin-top:10px;white-space:pre-line">공전 거리 제어 대기</div></div>
 <div class="card wide"><h2>실측값 추가 · 각도기 불필요</h2><p class="muted">기준선 오른쪽은 +, 왼쪽은 -로 입력하세요. 앞·뒤 차축 오차로 중심 좌우 오차와 각도를 자동 계산합니다.</p><div class="grid"><div><label>실제 이동거리 cm</label><input id="ad" type="number" step="0.1"><label>앞차축 중심 좌우 오차 cm</label><input id="fo" type="number" step="0.1"></div><div><label>뒤차축 중심 좌우 오차 cm</label><input id="ro" type="number" step="0.1"><label>최종 초음파 간격 오차 cm</label><input id="ge" type="number" step="0.1"></div><div><label>메모</label><textarea id="notes" rows="4"></textarea><button onclick="saveNotes()">각도 자동 계산·저장</button></div></div></div>
 <div class="card wide"><div class="row"><h2>최근 결과</h2><div id="files" class="files"></div></div><pre id="result">아직 결과가 없습니다.</pre></div></div><script>
-const $=id=>document.getElementById(id);function vec(v){let a=String(v||'').split(':');return a.length===4?a:['-','-','-','-']}function card(r){let f=r.fields||{},p=vec(f.rpm);return `<div class="card"><div class="row"><h2>Robot ${r.number}</h2><strong class="${r.online?'online':'offline'}">${r.online?'ONLINE':'OFFLINE'}</strong></div><div class="muted">${r.ip} · ${f.state||'-'}</div><div class="rpms">${['FL','FR','RL','RR'].map((w,i)=>`<div class="metric"><div class="label">${w} RPM</div><div class="value">${p[i]}</div></div>`).join('')}</div><div class="row" style="margin-top:9px"><span>초음파 ${f.distance_cm||'-'}cm</span><span>장애물 ${f.obstacle==='1'?'STOP':'CLEAR'}</span></div></div>`}async function api(path,body={}){let r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}),d=await r.json();if(!r.ok)throw Error(d.message);return d}async function start(b){try{await api('/api/start',b)}catch(e){alert(e.message)}}function startStraight(){start({type:'straight',robot:Number($('sr').value),speed:Number($('ss').value)})}function startOrbit(){start({type:'orbit',direction:$('od').value,linear:Number($('ol').value),rotation:Number($('or').value)})}async function finish(){try{await api('/api/finish')}catch(e){alert(e.message)}}async function stopAll(){await api('/api/stop')}function num(id){return $(id).value===''?null:Number($(id).value)}async function saveNotes(){try{await api('/api/annotate',{actual_distance_cm:num('ad'),lateral_error_cm:num('le'),heading_error_deg:num('he'),final_gap_error_cm:num('ge'),notes:$('notes').value});alert('저장 완료')}catch(e){alert(e.message)}}async function poll(){try{let d=await fetch('/api/status',{cache:'no-store'}).then(r=>r.json());$('robots').innerHTML=d.robot.robots.map(card).join('');$('mode').textContent=d.mode;$('msg').textContent=d.message;$('bar').style.width=(d.progress*100)+'%';$('result').textContent=d.last_result?JSON.stringify(d.last_result,null,2):'아직 결과가 없습니다.';let f='';if(d.json_file)f+=`<a href="/results/${encodeURIComponent(d.json_file)}">JSON 다운로드</a>`;if(d.csv_file)f+=`<a href="/results/${encodeURIComponent(d.csv_file)}">CSV 다운로드</a>`;$('files').innerHTML=f}catch(e){$('msg').textContent='연결 오류'}}setInterval(poll,300);poll();window.addEventListener('beforeunload',()=>navigator.sendBeacon('/api/stop','{}'));
+function updateOrbitStatus(o){const names={TRACKING:'정상',CHECK_JUMP:'거리 급변 확인 중',STOP:'안전정지'};const reasons={RANGE_NEAR:'18cm 이하 근접',RANGE_TARGET_LOST:'시작 간격에서 15cm 초과 이탈',RANGE_STALE:'거리 데이터 지연',RANGE_INVALID:'거리 측정 불가',RANGE_OUT_OF_BOUNDS:'측정 범위 이탈',RANGE_UNCONFIRMED:'급변값 확인 실패'};const f=(v,n=1)=>typeof v==='number'&&Number.isFinite(v)?v.toFixed(n):'-';$('orbitStatus').textContent=o.target_gap_cm===undefined?'공전 거리 제어 대기':`원시 거리 ${f(o.gap_cm)}cm → 보정용 ${f(o.gap_filtered_cm)}cm / 목표 ${f(o.target_gap_cm)}cm\n전후 보정 ${f(o.radial_command,3)} · ${names[o.gap_filter_state]||'-'} · 급변 감지 ${o.gap_rejected_total||0}회${o.gap_fault_reason?' · '+(reasons[o.gap_fault_reason]||o.gap_fault_reason):''}`;}
+const $=id=>document.getElementById(id);function vec(v){let a=String(v||'').split(':');return a.length===4?a:['-','-','-','-']}function card(r){let f=r.fields||{},p=vec(f.rpm);return `<div class="card"><div class="row"><h2>Robot ${r.number}</h2><strong class="${r.online?'online':'offline'}">${r.online?'ONLINE':'OFFLINE'}</strong></div><div class="muted">${r.ip} · ${f.state||'-'}</div><div class="rpms">${['FL','FR','RL','RR'].map((w,i)=>`<div class="metric"><div class="label">${w} RPM</div><div class="value">${p[i]}</div></div>`).join('')}</div><div class="row" style="margin-top:9px"><span>초음파 ${f.distance_cm||'-'}cm</span><span>장애물 ${f.obstacle==='1'?'STOP':'CLEAR'}</span></div></div>`}async function api(path,body={}){let r=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}),d=await r.json();if(!r.ok)throw Error(d.message);return d}async function start(b){try{await api('/api/start',b)}catch(e){alert(e.message)}}function startStraight(){start({type:'straight',robot:Number($('sr').value),speed:Number($('ss').value)})}function startOrbit(){start({type:'orbit',direction:$('od').value,linear:Number($('ol').value),rotation:Number($('or').value)})}async function finish(){try{await api('/api/finish')}catch(e){alert(e.message)}}async function stopAll(){await api('/api/stop')}function num(id){return $(id).value===''?null:Number($(id).value)}async function saveNotes(){try{await api('/api/annotate',{actual_distance_cm:num('ad'),lateral_error_cm:num('le'),heading_error_deg:num('he'),final_gap_error_cm:num('ge'),notes:$('notes').value});alert('저장 완료')}catch(e){alert(e.message)}}async function poll(){try{let d=await fetch('/api/status',{cache:'no-store'}).then(r=>r.json());$('robots').innerHTML=d.robot.robots.map(card).join('');$('mode').textContent=d.mode;$('msg').textContent=d.message;updateOrbitStatus(d.robot.orbit||{});$('bar').style.width=(d.progress*100)+'%';$('result').textContent=d.last_result?JSON.stringify(d.last_result,null,2):'아직 결과가 없습니다.';let f='';if(d.json_file)f+=`<a href="/results/${encodeURIComponent(d.json_file)}">JSON 다운로드</a>`;if(d.csv_file)f+=`<a href="/results/${encodeURIComponent(d.csv_file)}">CSV 다운로드</a>`;$('files').innerHTML=f}catch(e){$('msg').textContent='연결 오류'}}setInterval(poll,300);poll();window.addEventListener('beforeunload',()=>navigator.sendBeacon('/api/stop','{}'));
 </script><script>
 async function saveNotes(){try{await api('/api/annotate',{actual_distance_cm:num('ad'),front_offset_cm:num('fo'),rear_offset_cm:num('ro'),final_gap_error_cm:num('ge'),notes:$('notes').value});alert('중심 오차와 각도를 계산해 저장했습니다.')}catch(e){alert(e.message)}}
 </script></body></html>"""

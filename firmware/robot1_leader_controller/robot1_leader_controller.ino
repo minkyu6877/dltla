@@ -14,6 +14,7 @@
 
 #include <WiFi.h>
 #include <WiFiUdp.h>
+#include <Wire.h>
 #include "secrets.h"
 
 // -----------------------------------------------------------------------------
@@ -21,7 +22,7 @@
 // Copy secrets.example.h to secrets.h and enter the hotspot credentials.
 // -----------------------------------------------------------------------------
 const uint8_t ROBOT_ID = 1;
-const char* FIRMWARE_VERSION = "2026-08-21-r1-leader-retreat-v2";
+const char* FIRMWARE_VERSION = "2026-08-25-r1-leader-imu-v1";
 
 const uint16_t COMMAND_PORT = 4210;
 const uint16_t STATUS_PORT = 4212;
@@ -102,6 +103,12 @@ const unsigned long ULTRASONIC_TIMEOUT_US = 25000;
 const int OBSTACLE_CONFIRM_SAMPLES = 2;
 const int CLEAR_CONFIRM_SAMPLES = 3;
 
+// MPU6050 I2C pins from the supplied schematic.
+const int IMU_SDA = 4;
+const int IMU_SCL = 5;
+const uint8_t MPU6050_ADDRESS = 0x68;
+const unsigned long IMU_INTERVAL_US = 20000;  // 50 Hz
+
 volatile long encCountFL = 0;
 volatile long encCountFR = 0;
 volatile long encCountRL = 0;
@@ -148,6 +155,7 @@ unsigned long lastControlMs = 0;
 unsigned long lastStatusMs = 0;
 unsigned long lastWifiAttemptMs = 0;
 unsigned long lastUltrasonicMs = 0;
+unsigned long lastImuUs = 0;
 
 float distanceCm = 0.0f;
 bool distanceValid = false;
@@ -155,6 +163,22 @@ bool ultrasonicVerified = false;
 bool obstacleLatched = false;
 int obstacleSamples = 0;
 int clearSamples = 0;
+
+bool imuOk = false;
+bool imuAnglesInitialized = false;
+float accelXG = 0.0f;
+float accelYG = 0.0f;
+float accelZG = 0.0f;
+float gyroXDps = 0.0f;
+float gyroYDps = 0.0f;
+float gyroZDps = 0.0f;
+float gyroBiasX = 0.0f;
+float gyroBiasY = 0.0f;
+float gyroBiasZ = 0.0f;
+float rollDeg = 0.0f;
+float pitchDeg = 0.0f;
+float yawDeg = 0.0f;
+float imuTempC = 0.0f;
 
 float clampFloat(float value, float minimum, float maximum) {
   if (value < minimum) return minimum;
@@ -308,6 +332,110 @@ void updateControl() {
   lastControlMs = now;
 }
 
+bool writeMpuRegister(uint8_t reg, uint8_t value) {
+  Wire.beginTransmission(MPU6050_ADDRESS);
+  Wire.write(reg);
+  Wire.write(value);
+  return Wire.endTransmission() == 0;
+}
+
+bool readMpuRaw(
+  int16_t& ax,
+  int16_t& ay,
+  int16_t& az,
+  int16_t& temperature,
+  int16_t& gx,
+  int16_t& gy,
+  int16_t& gz
+) {
+  Wire.beginTransmission(MPU6050_ADDRESS);
+  Wire.write(0x3B);
+  if (Wire.endTransmission(false) != 0) return false;
+  uint8_t received = Wire.requestFrom(MPU6050_ADDRESS, (uint8_t)14, true);
+  if (received != 14 || Wire.available() < 14) return false;
+
+  ax = (int16_t)((Wire.read() << 8) | Wire.read());
+  ay = (int16_t)((Wire.read() << 8) | Wire.read());
+  az = (int16_t)((Wire.read() << 8) | Wire.read());
+  temperature = (int16_t)((Wire.read() << 8) | Wire.read());
+  gx = (int16_t)((Wire.read() << 8) | Wire.read());
+  gy = (int16_t)((Wire.read() << 8) | Wire.read());
+  gz = (int16_t)((Wire.read() << 8) | Wire.read());
+  return true;
+}
+
+bool initializeImu() {
+  Wire.begin(IMU_SDA, IMU_SCL);
+  Wire.setClock(400000);
+  if (!writeMpuRegister(0x6B, 0x00)) return false;
+  writeMpuRegister(0x1A, 0x03);
+  writeMpuRegister(0x1B, 0x00);
+  writeMpuRegister(0x1C, 0x00);
+  delay(100);
+
+  // Keep Robot 1 flat and motionless during this gyro-bias calibration.
+  const int samples = 300;
+  long sumX = 0;
+  long sumY = 0;
+  long sumZ = 0;
+  int goodSamples = 0;
+  for (int index = 0; index < samples; ++index) {
+    int16_t ax, ay, az, temperature, gx, gy, gz;
+    if (readMpuRaw(ax, ay, az, temperature, gx, gy, gz)) {
+      sumX += gx;
+      sumY += gy;
+      sumZ += gz;
+      goodSamples++;
+    }
+    delay(3);
+  }
+  if (goodSamples < samples * 9 / 10) return false;
+  gyroBiasX = ((float)sumX / goodSamples) / 131.0f;
+  gyroBiasY = ((float)sumY / goodSamples) / 131.0f;
+  gyroBiasZ = ((float)sumZ / goodSamples) / 131.0f;
+  lastImuUs = micros();
+  return true;
+}
+
+void updateImu() {
+  if (!imuOk) return;
+  unsigned long nowUs = micros();
+  unsigned long elapsedUs = nowUs - lastImuUs;
+  if (elapsedUs < IMU_INTERVAL_US) return;
+  lastImuUs = nowUs;
+
+  int16_t rawAx, rawAy, rawAz, rawTemperature, rawGx, rawGy, rawGz;
+  if (!readMpuRaw(rawAx, rawAy, rawAz, rawTemperature, rawGx, rawGy, rawGz)) {
+    imuOk = false;
+    pendingEvent = "IMU_READ_FAIL";
+    return;
+  }
+
+  accelXG = rawAx / 16384.0f;
+  accelYG = rawAy / 16384.0f;
+  accelZG = rawAz / 16384.0f;
+  gyroXDps = rawGx / 131.0f - gyroBiasX;
+  gyroYDps = rawGy / 131.0f - gyroBiasY;
+  gyroZDps = rawGz / 131.0f - gyroBiasZ;
+  imuTempC = rawTemperature / 340.0f + 36.53f;
+
+  float accelRoll = atan2(accelYG, accelZG) * 180.0f / PI;
+  float accelPitch = atan2(-accelXG, sqrt(accelYG * accelYG + accelZG * accelZG)) * 180.0f / PI;
+  float dt = clampFloat((float)elapsedUs / 1000000.0f, 0.001f, 0.10f);
+  if (!imuAnglesInitialized) {
+    rollDeg = accelRoll;
+    pitchDeg = accelPitch;
+    yawDeg = 0.0f;
+    imuAnglesInitialized = true;
+  } else {
+    rollDeg = 0.98f * (rollDeg + gyroXDps * dt) + 0.02f * accelRoll;
+    pitchDeg = 0.98f * (pitchDeg + gyroYDps * dt) + 0.02f * accelPitch;
+    yawDeg += gyroZDps * dt;
+    if (yawDeg > 180.0f) yawDeg -= 360.0f;
+    if (yawDeg < -180.0f) yawDeg += 360.0f;
+  }
+}
+
 void updateUltrasonic() {
   unsigned long now = millis();
   if (now - lastUltrasonicMs < ULTRASONIC_INTERVAL_MS) return;
@@ -401,6 +529,11 @@ void sendStatus(const String& event = "") {
   message += ",us_verified=" + String(ultrasonicVerified ? 1 : 0);
   message += ",stop_cm=" + String(OBSTACLE_STOP_CM, 1);
   message += ",obstacle=" + String(obstacleLatched ? 1 : 0);
+  message += ",imu_ok=" + String(imuOk ? 1 : 0);
+  message += ",accel_g=" + String(accelXG, 3) + ":" + String(accelYG, 3) + ":" + String(accelZG, 3);
+  message += ",gyro_dps=" + String(gyroXDps, 2) + ":" + String(gyroYDps, 2) + ":" + String(gyroZDps, 2);
+  message += ",att_deg=" + String(rollDeg, 1) + ":" + String(pitchDeg, 1) + ":" + String(yawDeg, 1);
+  message += ",imu_temp_c=" + String(imuTempC, 1);
   message += ",motor_inv=" + String(MOTOR_INV_FL) + ":" + String(MOTOR_INV_FR) + ":";
   message += String(MOTOR_INV_RL) + ":" + String(MOTOR_INV_RR);
   message += ",encoder_inv=" + String(ENC_INV_FL) + ":" + String(ENC_INV_FR) + ":";
@@ -573,6 +706,9 @@ void setup() {
   Serial.begin(115200);
   delay(300);
   setupPins();
+  Serial.println("Keep robot 1 flat and still: calibrating MPU6050...");
+  imuOk = initializeImu();
+  Serial.println(imuOk ? "MPU6050 ready" : "MPU6050 not detected");
   lastControlMs = millis();
   lastValidCommandMs = millis();
   lastStatusMs = millis();
@@ -582,6 +718,7 @@ void setup() {
 
 void loop() {
   maintainWifi();
+  updateImu();
   updateUltrasonic();
   if (udpStarted) receiveUdp();
 
